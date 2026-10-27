@@ -56,7 +56,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 - **Download:** 30 of 30 filings found and downloaded, 74 SEC requests, 140 MB. CVS FY2018 also has Exhibit 13 (annual report with MD&A and financials), which is fetched and parsed too.
 - **Parse:** 3,871 pages → **12,103 chunks** (3,290 of them tables), ~3.57M tokens (estimated at 4 characters per token), in ~12 s.
 - **Sections:** all 30 filings get their 10-K items detected (18–22 items each). Combined headings ("Items 10, 11, 12 and 13" at American Express) are filed under the first item; an out-of-order heading (PepsiCo FY2020 puts Item 9 after 9B) stays in the item before it.
-- **Index:** all **12,103 chunks embedded** with `gemini-embedding-001` (768 dims) in local Postgres + pgvector. The paid-tier run did 11,403 chunks in **250 s** with 214 API requests and no rate limiting. The tokens embedded, counted beforehand with Gemini's free `count_tokens`, were 3,559,565, which is about **$0.53** at $0.15 per 1M. The 4-characters-per-token estimate gave 3,662,068 for the same chunks, 3% high.
+- **Index:** all **12,103 chunks embedded** with `gemini-embedding-001` (768 dims) in local Postgres + pgvector. The paid-tier run did 11,403 chunks in **250 s** with 214 API requests and no rate limiting. The 11,453 chunks embedded on the paid tier (a 50-chunk check, then this run) were 3,559,565 tokens, counted beforehand with Gemini's free `count_tokens`: about **$0.53** at $0.15 per 1M. The 4-characters-per-token estimate gave 3,662,068 for the same chunks, 3% high.
 - **Test queries** (FinanceBench questions; hits filtered to the right company and year unless stated):
 
   | Question | Evidence page (FinanceBench) | Where it came back | Figure in the chunk |
@@ -67,7 +67,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
   | Boeing FY2022 legal battles (**no filters**) | 113 | hits 2–3, p. 110–111 (2-page offset vs their PDF); all 5 hits Boeing | – |
   | General Mills FY2022 retention ratio | 45 and 49 | p. 49 (cash flow) hit 1; **p. 45 (income statement) not in the top 5** | – |
 
-  Fresh query embedding took 347–701 ms and the vector search 12–39 ms (single runs). Repeated questions come from the cache in ~2 ms. The General Mills miss, a question that needs two statements, is the kind hybrid search and query decomposition should fix.
+  Fresh query embedding took 259–701 ms and the vector search 12–39 ms (single runs). Repeated questions come from the cache in ~2 ms. The General Mills miss, a question that needs two statements, is the kind hybrid search and query decomposition should fix.
 - **Offline model (bge-base on CPU):** works, but ~1 chunk/s on this 8 GB Mac, too slow for the full corpus.
 - **Page check against FinanceBench** (`python -m finrag page-check`): for the 57 in-scope questions, 72 of 73 evidence passages were found in our chunks; **50 on the same page** as FinanceBench's PDF, **57 within ±1 page**. Most misses are offsets from cover pages in the company PDFs, plus CVS FY2018 where FinanceBench's PDF appends Exhibit 13 and we number it separately.
 
