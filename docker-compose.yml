@@ -1,0 +1,20 @@
+# Local Postgres 17 + pgvector. Host port 5433 to avoid clashing with other local Postgres.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: finrag
+      POSTGRES_PASSWORD: finrag
+      POSTGRES_DB: finrag
+    ports:
+      - "5433:5432"
+    volumes:
+      - finrag_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finrag -d finrag"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  finrag_pg:

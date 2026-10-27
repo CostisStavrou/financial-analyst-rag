@@ -1,0 +1,80 @@
+# Corpus: 10 companies x 3 fiscal years of 10-K filings.
+#
+# Picked to overlap with the FinanceBench open-source sample (150 questions, 112 on 10-Ks):
+# for each company the 3 fiscal years with the most 10-K questions, then the top 10 companies
+# (CVS Health instead of Corning, tied on 4, for a Health Care name). Where a company has
+# questions in fewer than 3 years, the nearest earlier year fills the gap.
+# Covers 57 of the 112 FinanceBench 10-K questions. Re-check with `finrag financebench`.
+#
+# `fiscal_years` use the company's own label (FinanceBench `doc_period`), e.g. Best Buy
+# fiscal 2023 ended 28 Jan 2023.
+
+[[company]]
+name = "Boeing"
+ticker = "BA"
+cik = 12927
+financebench = "Boeing"
+fiscal_years = [2018, 2021, 2022]
+
+[[company]]
+name = "AMD"
+ticker = "AMD"
+cik = 2488
+financebench = "AMD"
+fiscal_years = [2015, 2021, 2022]
+
+[[company]]
+name = "American Express"
+ticker = "AXP"
+cik = 4962
+financebench = "American Express"
+fiscal_years = [2020, 2021, 2022]
+
+[[company]]
+name = "PepsiCo"
+ticker = "PEP"
+cik = 77476
+financebench = "PepsiCo"
+fiscal_years = [2020, 2021, 2022]
+
+[[company]]
+name = "Verizon"
+ticker = "VZ"
+cik = 732712
+financebench = "Verizon"
+fiscal_years = [2020, 2021, 2022]
+
+[[company]]
+name = "Best Buy"
+ticker = "BBY"
+cik = 764478
+financebench = "Best Buy"
+fiscal_years = [2017, 2019, 2023]
+
+[[company]]
+name = "Amcor"
+ticker = "AMCR"
+cik = 1748790
+financebench = "Amcor"
+fiscal_years = [2020, 2022, 2023]
+
+[[company]]
+name = "3M"
+ticker = "MMM"
+cik = 66740
+financebench = "3M"
+fiscal_years = [2018, 2021, 2022]
+
+[[company]]
+name = "General Mills"
+ticker = "GIS"
+cik = 40704
+financebench = "General Mills"
+fiscal_years = [2019, 2020, 2022]
+
+[[company]]
+name = "CVS Health"
+ticker = "CVS"
+cik = 64803
+financebench = "CVS Health"
+fiscal_years = [2018, 2021, 2022]

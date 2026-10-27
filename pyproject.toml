@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finrag"
+version = "0.1.0"
+description = "Multi-agent RAG over SEC 10-K filings, evaluated on FinanceBench"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+    "lxml>=5.3",
+    "numpy>=1.26",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    "google-genai>=1.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Offline embeddings (no API key): BAAI/bge-base-en-v1.5 via ONNX, 768-dim.
+local = ["fastembed>=0.4"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+finrag = "finrag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+finrag = ["index/schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
