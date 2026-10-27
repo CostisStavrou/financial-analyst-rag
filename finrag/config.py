@@ -31,6 +31,8 @@ class Settings:
     embed_provider: str
     embed_model: str
     embed_dim: int
+    embed_rpm: int = 0  # texts per minute, 0 = no pacing
+    embed_tpm: int = 0  # estimated tokens per minute, 0 = no pacing
 
     @property
     def raw_dir(self) -> Path:
@@ -59,6 +61,8 @@ def get_settings() -> Settings:
         embed_provider=provider,
         embed_model=os.getenv("EMBED_MODEL", "").strip() or default_model,
         embed_dim=int(os.getenv("EMBED_DIM", "768")),
+        embed_rpm=int(os.getenv("EMBED_RPM") or 0),
+        embed_tpm=int(os.getenv("EMBED_TPM") or 0),
     )
 
 

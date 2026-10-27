@@ -17,6 +17,7 @@ import logging
 import re
 import sqlite3
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -58,11 +59,27 @@ def _normalise(v: np.ndarray) -> np.ndarray:
     return v / n if n else v
 
 
-class GeminiEmbedder:
-    max_batch = 100  # texts per request
-    max_batch_tokens = 20_000  # keeps single requests well inside per-minute token quotas
+class RateLimited(Exception):
+    def __init__(self, wait: float, quota: str):
+        super().__init__(quota)
+        self.wait, self.quota = wait, quota
 
-    def __init__(self, api_key: str, model: str, dim: int):
+
+class GeminiEmbedder:
+    """Batches texts per request. Quotas depend on the key's tier and are only shown in AI
+    Studio, so the batch size adapts: halved after each 429, after waiting the delay the API
+    suggests. A daily quota stops the run (progress so far is cached).
+
+    Optional pacing (EMBED_RPM texts/min, EMBED_TPM estimated tokens/min) keeps a free-tier
+    key under its per-minute limits instead of bouncing off them; each text in a batch
+    counts towards the request quota.
+    """
+
+    max_batch = 100  # texts per request
+    max_batch_tokens = 20_000  # estimated tokens per request
+    max_consecutive_429 = 20
+
+    def __init__(self, api_key: str, model: str, dim: int, rpm: int = 0, tpm: int = 0):
         if not api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY is not set. Add it to .env (see .env.example), "
@@ -74,12 +91,36 @@ class GeminiEmbedder:
         self.model, self.dim = model, dim
         self.tokens_sent = 0
         self.requests = 0
+        self.rate_limited = 0
+        self.rpm, self.tpm = rpm, tpm
+        if rpm:
+            self.max_batch = min(self.max_batch, rpm)
+        if tpm:
+            self.max_batch_tokens = min(self.max_batch_tokens, tpm)
+        self._sent: deque[tuple[float, int, int]] = deque()  # (time, texts, tokens)
+
+    def _pace(self, texts: int, tokens: int) -> None:
+        """Sleep until this batch fits in the last-60-seconds budget."""
+        if not (self.rpm or self.tpm):
+            return
+        while True:
+            now = time.monotonic()
+            while self._sent and now - self._sent[0][0] >= 60:
+                self._sent.popleft()
+            used_t = sum(n for _, n, _ in self._sent)
+            used_k = sum(k for _, _, k in self._sent)
+            if (not self.rpm or used_t + texts <= self.rpm) and (
+                not self.tpm or used_k + tokens <= self.tpm
+            ):
+                self._sent.append((now, texts, tokens))
+                return
+            time.sleep(max(0.5, 60 - (now - self._sent[0][0])))
 
     def _call(self, texts: list[str], task: str) -> list[np.ndarray]:
         from google.genai import errors, types
 
         config = types.EmbedContentConfig(task_type=task, output_dimensionality=self.dim)
-        for attempt in range(8):
+        for attempt in range(6):
             try:
                 self.requests += 1
                 res = self.client.models.embed_content(
@@ -88,27 +129,48 @@ class GeminiEmbedder:
                 self.tokens_sent += sum(est_tokens(t) for t in texts)
                 return [_normalise(np.asarray(e.values, dtype=np.float32)) for e in res.embeddings]
             except errors.APIError as e:
-                if e.code not in (429, 500, 503) or attempt == 7:
+                msg = str(e)
+                if e.code == 429:
+                    quota = ",".join(sorted(set(re.findall(r"quotaId['\"]?:\s*['\"]?([\w-]+)", msg))))
+                    if "PerDay" in quota:
+                        raise RuntimeError(
+                            f"Gemini daily quota reached ({quota}). Embeddings so far are cached; "
+                            "run `finrag index` again after the reset."
+                        ) from e
+                    hint = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
+                    raise RateLimited(float(hint.group(1)) + 1 if hint else 60.0, quota) from e
+                if e.code not in (500, 502, 503, 504) or attempt == 5:
                     raise
-                hint = re.search(r"retry in ([\d.]+)s", str(e), re.IGNORECASE)
-                wait = float(hint.group(1)) + 1 if hint else min(60, 2 ** (attempt + 1))
-                log.warning("Gemini %s; waiting %.0fs", e.code, wait)
-                time.sleep(wait)
+                time.sleep(2 ** (attempt + 1))
         raise RuntimeError("unreachable")
 
     def embed(self, texts: list[str], task: str) -> list[np.ndarray]:
         out: list[np.ndarray] = []
-        batch: list[str] = []
-        for t in texts:
-            if batch and (
-                len(batch) >= self.max_batch
-                or sum(map(est_tokens, batch)) + est_tokens(t) > self.max_batch_tokens
-            ):
+        i, strikes = 0, 0
+        while i < len(texts):
+            batch, tokens = [], 0
+            for t in texts[i:]:
+                n = est_tokens(t)
+                if batch and (len(batch) >= self.max_batch or tokens + n > self.max_batch_tokens):
+                    break
+                batch.append(t)
+                tokens += n
+            self._pace(len(batch), tokens)
+            try:
                 out.extend(self._call(batch, task))
-                batch = []
-            batch.append(t)
-        if batch:
-            out.extend(self._call(batch, task))
+                i += len(batch)
+                strikes = 0
+            except RateLimited as e:
+                self.rate_limited += 1
+                strikes += 1
+                if strikes > self.max_consecutive_429:
+                    raise RuntimeError(f"Gemini keeps rate-limiting ({e.quota}); stopping") from e
+                if len(batch) > 1:
+                    self.max_batch = max(1, len(batch) // 2)
+                    self.max_batch_tokens = max(1_000, tokens // 2)
+                log.warning("Gemini 429 %s: waiting %.0fs, batch now <= %d texts / ~%d tokens",
+                            e.quota, e.wait, self.max_batch, self.max_batch_tokens)
+                time.sleep(e.wait)
         return out
 
 
@@ -134,9 +196,10 @@ class LocalEmbedder:
 class Embedder:
     """Cached front end: embed_documents / embed_query."""
 
-    def __init__(self, provider: str, model: str, dim: int, api_key: str, cache_dir: Path):
+    def __init__(self, provider: str, model: str, dim: int, api_key: str, cache_dir: Path,
+                 rpm: int = 0, tpm: int = 0):
         if provider == "gemini":
-            self.impl = GeminiEmbedder(api_key, model, dim)
+            self.impl = GeminiEmbedder(api_key, model, dim, rpm, tpm)
         elif provider == "local":
             self.impl = LocalEmbedder(model, dim)
         else:
@@ -171,4 +234,6 @@ def make_embedder(settings) -> Embedder:
         settings.embed_dim,
         settings.gemini_api_key,
         settings.cache_dir,
+        settings.embed_rpm,
+        settings.embed_tpm,
     )

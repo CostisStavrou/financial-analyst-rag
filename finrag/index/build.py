@@ -60,7 +60,9 @@ def build_index(
                 [(v, settings.embed_model, c.id) for v, c in zip(vecs, part)],
             )
         done += len(part)
-        log.info("embedded %d/%d", done, len(todo))
+        impl = embedder.impl
+        log.info("embedded %d/%d (requests %d, rate-limited %d, %.0fs)", done, len(todo),
+                 impl.requests, getattr(impl, "rate_limited", 0), time.perf_counter() - t0)
     elapsed = time.perf_counter() - t0
 
     total, embedded = conn.execute(
@@ -72,6 +74,7 @@ def build_index(
         "embedded_now": done,
         "cache_hits": embedder.cache_hits if embedder else 0,
         "api_requests": embedder.impl.requests if embedder else 0,
+        "rate_limited": getattr(embedder.impl, "rate_limited", 0) if embedder else 0,
         "est_tokens_sent": embedder.impl.tokens_sent if embedder else 0,
         "embed_seconds": round(elapsed, 1),
         "chunks_in_db": total,
