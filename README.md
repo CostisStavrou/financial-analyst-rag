@@ -4,6 +4,71 @@
 
 A multi-agent RAG system that answers questions about US companies' annual reports (10-K filings), with exact numbers, page citations and a cross-check against the SEC's structured financial data. Built on Google Cloud with Gemini.
 
+## Quick start (local, nothing paid on Google Cloud)
+
+Needs Python 3.11+ and Docker.
+
+```bash
+git clone <this repo> && cd "Financial Analyst RAG"
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env    # then fill in SEC_USER_AGENT and GEMINI_API_KEY
+docker compose up -d    # Postgres 17 + pgvector on localhost:5433
+```
+
+Then the pipeline, one command per step (run from the repo root):
+
+```bash
+.venv/bin/python -m finrag download   # 30 10-Ks from SEC EDGAR -> data/raw/edgar (~140 MB)
+.venv/bin/python -m finrag parse      # sections, pages, chunks -> data/parsed/*.jsonl
+.venv/bin/python -m finrag db-init    # schema (vector(768), HNSW + full-text indexes)
+.venv/bin/python -m finrag index      # load chunks, embed with gemini-embedding-001
+.venv/bin/python -m finrag ask "What was 3M's capital expenditure in FY2022?" --ticker MMM --year 2022
+```
+
+- `ask` prints the top-k chunks with a citation each: company, 10-K fiscal year, section, page (and the page number printed in the filing), plus the SEC URL. Filters: `--ticker`, `--year`, `--item 7`, `-k 10`, `--full`.
+- `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice.
+- No Gemini key? `EMBED_PROVIDER=local` with `pip install -e ".[local]"` uses BAAI/bge-base-en-v1.5 on CPU (768-dim, slow: ~1 chunk/s). Use a separate database for it, e.g. `DATABASE_URL=.../finrag_local`; the index refuses to mix models.
+- Other commands: `stats` (chunks and embeddings per filing), `financebench` (questions covered), `page-check` (our pages vs FinanceBench evidence pages), `download --dry-run`, `db-init --reset`.
+- Tests: `.venv/bin/python -m pytest`.
+
+**macOS note:** if the repo sits in an iCloud-synced folder (e.g. `~/Documents`), macOS can mark files in `.venv` as hidden, and Python 3.13 then skips the editable-install `.pth` file, so the `finrag` console script fails with `No module named 'finrag'`. `python -m finrag` from the repo root always works.
+
+## Status
+
+| Days | Status |
+|---|---|
+| 1–4 (27–30 Oct) | **Mostly done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, pgvector schema and loader, `ask` command. Still to run: Gemini embedding of the full corpus (needs `GEMINI_API_KEY` in `.env`) and the first end-to-end `ask` query (needs Postgres up). |
+| 5–8 | Next: hybrid search (Postgres FTS + vector, RRF), reranking, FinanceBench baseline, table extraction. |
+
+### Day 1–4 numbers (all from real runs on 27 Oct 2026)
+
+- **Download:** 30 of 30 filings found and downloaded, 74 SEC requests, 140 MB. CVS FY2018 also has Exhibit 13 (annual report with MD&A and financials), which is fetched and parsed too.
+- **Parse:** 3,871 pages → **12,103 chunks** (3,290 of them tables), ~3.57M tokens (estimated at 4 characters per token), in ~12 s.
+- **Sections:** all 30 filings get their 10-K items detected (18–22 items each). Combined headings ("Items 10, 11, 12 and 13" at American Express) are filed under the first item; an out-of-order heading (PepsiCo FY2020 puts Item 9 after 9B) stays in the item before it.
+- **Index (smoke test, offline model):** schema created; 1,315 3M chunks loaded into Postgres and 50 embedded with bge-base on CPU (~1 chunk/s on this 8 GB Mac, too slow for the full corpus).
+- **Page check against FinanceBench** (`python -m finrag page-check`): for the 57 in-scope questions, 72 of 73 evidence passages were found in our chunks; **50 on the same page** as FinanceBench's PDF, **57 within ±1 page**. Most misses are offsets from cover pages in the company PDFs, plus CVS FY2018 where FinanceBench's PDF appends Exhibit 13 and we number it separately.
+
+## How ingestion works
+
+- **Download** ([`finrag/ingest/edgar.py`](finrag/ingest/edgar.py)): `data.sec.gov/submissions` for the filing list, the filing's `-index.htm` for its documents, then the 10-K HTML (plus any `EX-13`). Original 10-Ks only, no amendments. Fiscal year = the year the period ends (Best Buy FY2023 ended 28 Jan 2023), checked against FinanceBench's own accession numbers for 3M and AMD.
+- **Parse** ([`finrag/ingest/parse_html.py`](finrag/ingest/parse_html.py)): HTML → ordered paragraphs and tables. Pages come from the filing's CSS page breaks; the printed page number in the footer is kept as `page_label`. Hidden inline-XBRL headers are dropped. 10-K items are found from "Item 7." style headings, ignoring the table of contents. Filings converted from PDF (General Mills FY2022: every line an absolutely positioned `<div>`, no `<table>` tags) are rebuilt from x/y coordinates into lines, paragraphs and table rows.
+- **Chunk** ([`finrag/ingest/chunk.py`](finrag/ingest/chunk.py)): ~500-token text chunks within one section, a short paragraph of overlap; every table is its own chunk with its caption (long tables split by rows, header repeated). Each chunk keeps company, ticker, fiscal year, accession, document, item, section, page range, printed page and SEC URL. The embedded text starts with a one-line header (company, year, section, page).
+- **Index** ([`finrag/index/`](finrag/index)): Postgres `chunks` table with `vector(768)` (HNSW, cosine) and a generated `tsvector` column (GIN) ready for hybrid search.
+
+## Repo layout
+
+```
+config/companies.toml   corpus: companies, CIKs, fiscal years
+finrag/ingest/          EDGAR download, HTML parsing, chunking
+finrag/index/           embeddings (Gemini / local), Postgres schema and loading
+finrag/retrieve/        vector search with metadata filters
+finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
+finrag/eval/            FinanceBench loading, coverage, page check
+finrag/cli.py           python -m finrag <command>
+tests/                  parser and chunker tests
+docker-compose.yml      local Postgres + pgvector
+```
+
 ## Why
 
 - Annual reports are 100–300 pages each. Across dozens of companies and years, that's far beyond any chat context: retrieval is genuinely needed.
@@ -12,10 +77,28 @@ A multi-agent RAG system that answers questions about US companies' annual repor
 
 ## Data
 
-- **SEC EDGAR**: 10-K filings via the official free API. SEC rules: identify yourself in the `User-Agent` header (name + contact email) and stay under their request-rate limit.
-- **SEC XBRL "company facts"**: structured financial figures, used to cross-check numbers.
-- **FinanceBench**: question/answer set over 10-Ks (check its licence before use).
-- Scope: about 10 companies × 3 years, chosen to overlap with FinanceBench questions.
+- **SEC EDGAR**: 10-K filings via the official free API. SEC rules: identify yourself in the `User-Agent` header (name + contact email) and stay under their request-rate limit. The downloader waits ≥ 0.5 s between requests (≤ 2/s; SEC's limit is 10/s).
+- **SEC XBRL "company facts"**: structured financial figures, used to cross-check numbers (days 9–12).
+- **FinanceBench**: [`PatronusAI/financebench`](https://huggingface.co/datasets/PatronusAI/financebench) on Hugging Face, the open-source sample of 150 questions (112 on 10-Ks). **Licence: CC BY-NC 4.0** (checked 27 Oct 2026): fine for this non-commercial portfolio project with attribution (Islam et al., 2023, [arXiv:2311.11944](https://arxiv.org/abs/2311.11944)). It is downloaded on demand into `data/` and not redistributed in this repo.
+
+### Corpus: 10 companies × 3 fiscal years
+
+Chosen to overlap with FinanceBench: for each company, the 3 fiscal years with the most 10-K questions, then the top 10 companies (CVS Health instead of Corning, tied, to add a Health Care name). Gaps filled with the nearest earlier year. Defined in [`config/companies.toml`](config/companies.toml).
+
+| Company | Ticker | Fiscal years | FinanceBench 10-K questions covered |
+|---|---|---|---|
+| AMD | AMD | 2015, 2021, 2022 | 8 |
+| Boeing | BA | 2018, 2021, 2022 | 8 |
+| American Express | AXP | 2020, 2021, 2022 | 7 |
+| PepsiCo | PEP | 2020, 2021, 2022 | 6 |
+| 3M | MMM | 2018, 2021, 2022 | 5 |
+| Amcor | AMCR | 2020, 2022, 2023 | 5 |
+| Best Buy | BBY | 2017, 2019, 2023 | 5 |
+| Verizon | VZ | 2020, 2021, 2022 | 5 |
+| CVS Health | CVS | 2018, 2021, 2022 | 4 |
+| General Mills | GIS | 2019, 2020, 2022 | 4 |
+
+**57 of the 112** FinanceBench 10-K questions fall inside this corpus (`python -m finrag financebench`). The evaluation runs on those 57.
 
 ## Architecture (planned)
 
