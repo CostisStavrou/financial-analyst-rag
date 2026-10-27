@@ -27,13 +27,14 @@ dev = ["pytest>=8", "ruff>=0.6"]
 finrag = "finrag.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["finrag*"]
 
 [tool.setuptools.package-data]
 finrag = ["index/schema.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

@@ -90,7 +90,7 @@ class GeminiEmbedder:
             except errors.APIError as e:
                 if e.code not in (429, 500, 503) or attempt == 7:
                     raise
-                hint = re.search(r"retry in ([\d.]+)s", str(e), re.I)
+                hint = re.search(r"retry in ([\d.]+)s", str(e), re.IGNORECASE)
                 wait = float(hint.group(1)) + 1 if hint else min(60, 2 ** (attempt + 1))
                 log.warning("Gemini %s; waiting %.0fs", e.code, wait)
                 time.sleep(wait)

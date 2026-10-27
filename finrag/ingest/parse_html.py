@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 from lxml import html as lxml_html
@@ -28,9 +29,9 @@ BLOCK_TAGS = {
 }
 SKIP_TAGS = {"script", "style", "head", "title", "noscript", "ix:header", "xml"}
 _WS = re.compile(r"\s+")
-_PAGE_LABEL = re.compile(r"^(?:page\s+)?(?:[a-z]{1,2}\s?-\s?)?\d{1,3}$", re.I)
-_NAV = re.compile(r"^(table of contents|index|back to contents|return to table of contents)$", re.I)
-ITEM_RE = re.compile(r"^items?\s*(\d{1,2})\s*([abc])?\b[\s.:\-–—]*(.*)$", re.I)
+_PAGE_LABEL = re.compile(r"^(?:page\s+)?(?:[a-z]{1,2}\s?-\s?)?\d{1,3}$", re.IGNORECASE)
+_NAV = re.compile(r"^(table of contents|index|back to contents|return to table of contents)$", re.IGNORECASE)
+ITEM_RE = re.compile(r"^items?\s*(\d{1,2})\s*([abc])?\b[\s.:\-–—]*(.*)$", re.IGNORECASE)
 
 ITEM_TITLES = {
     "1": "Business",
@@ -82,7 +83,7 @@ class ParsedDoc:
 
 
 def _clean(text: str) -> str:
-    return _WS.sub(" ", text.replace("\xa0", " ").replace("​", "")).strip()
+    return _WS.sub(" ", text.replace("\xa0", " ").replace("\u200b", "")).strip()
 
 
 def _style(el) -> str:
@@ -102,23 +103,125 @@ def _breaks(el, hr_breaks: bool) -> tuple[bool, bool]:
     return before, after
 
 
+def _merge_cells(cells: list[str]) -> list[str]:
+    """Drop empty cells; glue "$" / "(" to the number after and ")" / "%" to the one before."""
+    merged: list[str] = []
+    for c in cells:
+        if not c:
+            continue
+        if merged and (merged[-1] in ("$", "(", "$(", "€", "£") or c in (")", "%", ")%", "%)")):
+            merged[-1] = (merged[-1] + c).replace("$ ", "$")
+        else:
+            merged.append(c)
+    return merged
+
+
 def _table_rows(table) -> list[list[str]]:
     rows = []
     for tr in table.xpath("./tr|./thead/tr|./tbody/tr|./tfoot/tr"):
         if _hidden(tr):
             continue
         cells = [_clean(td.text_content()) for td in tr.xpath("./td|./th") if not _hidden(td)]
-        merged: list[str] = []
-        for c in cells:
-            if not c:
-                continue
-            if merged and (merged[-1] in ("$", "(", "$(", "€", "£") or c in (")", "%", ")%", "%)")):
-                merged[-1] = (merged[-1] + c).replace("$ ", "$")
-            else:
-                merged.append(c)
+        merged = _merge_cells(cells)
         if merged:
             rows.append(merged)
     return rows
+
+
+# Some filings (e.g. General Mills FY2022) are PDF-to-HTML conversions: every printed line,
+# or table cell, is an absolutely positioned <div> with no <table> tags. For those, rebuild
+# lines from the coordinates, then paragraphs (by vertical gap) and tables (lines with
+# several cells).
+_LEFT = re.compile(r"(?:^|;)left:(-?[\d.]+)px")
+_TOP = re.compile(r"(?:^|;)top:(-?[\d.]+)px")
+
+
+def _layout_page(frags: list[tuple[float, float, str]]) -> list[tuple[str, object]]:
+    if not frags:
+        return []
+    lines: list[tuple[float, list[tuple[float, str]]]] = []
+    for top, left, text in sorted(frags):
+        if lines and top - lines[-1][0] <= 3:
+            lines[-1][1].append((left, text))
+        else:
+            lines.append((top, [(left, text)]))
+    cells = [[t for _, t in sorted(parts)] for _, parts in lines]
+    tops = [t for t, _ in lines]
+    gaps = sorted(b - a for a, b in pairwise(tops))
+    line_gap = gaps[len(gaps) // 2] if gaps else 15.0
+    is_row = [len(c) >= 2 for c in cells]
+    for i in range(1, len(cells) - 1):  # label-only rows inside a table ("Current assets:")
+        if not is_row[i] and is_row[i - 1] and is_row[i + 1]:
+            is_row[i] = True
+
+    events: list[tuple[str, object]] = []
+    para: list[str] = []
+    table: list[list[str]] = []
+
+    def end_para():
+        if para:
+            events.append(("text", " ".join(para)))
+            para.clear()
+
+    def end_table():
+        if table:
+            events.append(("table", [list(r) for r in table]))
+            table.clear()
+
+    for i, row in enumerate(cells):
+        gap = tops[i] - tops[i - 1] if i else 0
+        if is_row[i]:
+            end_para()
+            if table and gap > 3 * line_gap:
+                end_table()
+            merged = _merge_cells(row)
+            if merged:
+                table.append(merged)
+        else:
+            end_table()
+            text = row[0]
+            if ITEM_RE.match(text) and len(text) < 150:  # an item heading is its own block
+                end_para()
+                events.append(("text", text))
+                continue
+            if para and gap > 1.45 * line_gap:
+                end_para()
+            para.append(text)
+    end_para()
+    end_table()
+    return events
+
+
+def _positioned_events(root) -> list[tuple[str, object]]:
+    events: list[tuple[str, object]] = []
+    frags: list[tuple[float, float, str]] = []
+
+    def new_page():
+        events.extend(_layout_page(frags))
+        frags.clear()
+        events.append(("page", None))
+
+    def visit(el):
+        if not isinstance(el.tag, str) or el.tag.lower() in SKIP_TAGS or _hidden(el):
+            return
+        before, after = _breaks(el, False)
+        if before:
+            new_page()
+        style = _style(el)
+        if "position:absolute" in style:
+            text = _clean(el.text_content())
+            left, top = _LEFT.search(style), _TOP.search(style)
+            if text and left and top:
+                frags.append((float(top.group(1)), float(left.group(1)), text))
+        else:
+            for child in el:
+                visit(child)
+        if after:
+            new_page()
+
+    visit(root)
+    events.extend(_layout_page(frags))
+    return events
 
 
 class _Walker:
@@ -192,14 +295,18 @@ def parse_html(content: bytes) -> ParsedDoc:
     css_breaks = len(root.xpath('//*[contains(translate(@style," ",""),"page-break")'
                                 ' or contains(translate(@style," ",""),"break-before:page")'
                                 ' or contains(translate(@style," ",""),"break-after:page")]'))
-    walker = _Walker(hr_breaks=css_breaks < 5)
-    walker.walk(root)
-    walker.flush()
+    if len(root.xpath('//div[contains(translate(@style," ",""),"position:absolute")]')) > 2000:
+        events = _positioned_events(root)
+    else:
+        walker = _Walker(hr_breaks=css_breaks < 5)
+        walker.walk(root)
+        walker.flush()
+        events = walker.events
 
     blocks: list[Block] = []
     page_labels: dict[int, str] = {}
     page, page_start = 1, 0
-    for kind, payload in walker.events + [("page", None)]:
+    for kind, payload in events + [("page", None)]:
         if kind == "page":
             if len(blocks) == page_start:
                 continue  # empty page (double break)
@@ -248,7 +355,8 @@ def assign_sections(doc: ParsedDoc) -> None:
     blocks = doc.blocks
     cands: list[tuple[int, str]] = []
     for i, b in enumerate(blocks):
-        if b.kind != "text" or len(b.text) > 150:
+        # Combined headings ("Items 10, 11, 12 and 13. Directors, ...; Executive ...") run long.
+        if b.kind != "text" or len(b.text) > (300 if b.text[:5].lower() == "items" else 150):
             continue
         m = ITEM_RE.match(b.text)
         if m and 1 <= int(m.group(1)) <= 16:
@@ -301,10 +409,10 @@ def assign_sections(doc: ParsedDoc) -> None:
 # Exhibit 13 (annual report to shareholders) has no "Item" headings; map its main parts
 # to the 10-K items they stand in for.
 _EX13_HEADINGS = [
-    (re.compile(r"management.s discussion and analysis", re.I), "7"),
-    (re.compile(r"quantitative and qualitative disclosures? about market risk", re.I), "7A"),
+    (re.compile(r"management.s discussion and analysis", re.IGNORECASE), "7"),
+    (re.compile(r"quantitative and qualitative disclosures? about market risk", re.IGNORECASE), "7A"),
     (re.compile(r"(report of independent registered public accounting firm|"
-                r"consolidated statements? of (income|operations|earnings))", re.I), "8"),
+                r"consolidated statements? of (income|operations|earnings))", re.IGNORECASE), "8"),
 ]
 
 

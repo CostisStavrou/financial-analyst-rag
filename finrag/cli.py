@@ -112,6 +112,16 @@ def cmd_financebench(args) -> None:
     print(json.dumps(cov, indent=2))
 
 
+def cmd_page_check(args) -> None:
+    from finrag.eval import financebench
+    from finrag.eval.page_check import page_check
+    from finrag.ingest.build import load_chunks
+
+    s = get_settings()
+    rows = financebench.load(financebench.download(s.data_dir))
+    print(json.dumps(page_check(rows, load_companies(), load_chunks(s.parsed_dir)), indent=2))
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="finrag", description=__doc__)
     p.add_argument("-v", "--verbose", action="store_true")
@@ -149,6 +159,9 @@ def main(argv: list[str] | None = None) -> None:
 
     fb = sub.add_parser("financebench", help="FinanceBench questions covered by the corpus")
     fb.set_defaults(func=cmd_financebench)
+
+    pc = sub.add_parser("page-check", help="compare chunk pages with FinanceBench evidence pages")
+    pc.set_defaults(func=cmd_page_check)
 
     args = p.parse_args(argv)
     logging.basicConfig(

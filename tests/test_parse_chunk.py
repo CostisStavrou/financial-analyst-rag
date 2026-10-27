@@ -1,8 +1,8 @@
+import pytest
+
 from finrag.ingest.chunk import chunk_document
 from finrag.ingest.edgar import check_user_agent, fiscal_year_of
 from finrag.ingest.parse_html import parse_html
-
-import pytest
 
 BREAK = '<div style="page-break-after: always"></div>'
 FILLER = "Revenue grew because customers bought more widgets in every region. " * 12

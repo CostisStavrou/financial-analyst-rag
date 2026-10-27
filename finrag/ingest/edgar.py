@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import requests
@@ -31,7 +31,7 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/{name}"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{file}"
 # Exhibit 13 (annual report to shareholders) holds MD&A and financials for companies that
 # incorporate them into the 10-K by reference.
-WANTED_EXHIBITS = re.compile(r"^EX-13", re.I)
+WANTED_EXHIBITS = re.compile(r"^EX-13", re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
@@ -248,7 +248,7 @@ def download_company(
             (dest / d.filename).write_bytes(body)
             d.sha256 = hashlib.sha256(body).hexdigest()
             d.bytes = len(body)
-        meta.downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        meta.downloaded_at = datetime.now(UTC).isoformat(timespec="seconds")
         meta_path.write_text(json.dumps(asdict(meta), indent=2))
         metas.append(meta)
     return metas
