@@ -16,9 +16,10 @@ log = logging.getLogger(__name__)
 
 def build_index(
     settings: Settings, tickers: set[str] | None = None, limit: int | None = None,
-    batch: int = 200, first: list[tuple[str, int]] | None = None,
+    batch: int = 200, first: list[tuple[str, int]] | None = None, reindex: bool = False,
 ) -> dict:
-    """`first`: (ticker, fiscal year) filings to embed before the rest, in that order."""
+    """`first`: (ticker, fiscal year) filings to embed before the rest, in that order.
+    The HNSW index is rebuilt after new vectors are written, or always with `reindex`."""
     conn = db.connect(settings.database_url)
     db.init_schema(conn, settings.embed_dim, settings.embed_model)
 
@@ -68,6 +69,12 @@ def build_index(
         log.info("embedded %d/%d (requests %d, rate-limited %d, %.0fs)", done, len(todo),
                  impl.requests, getattr(impl, "rate_limited", 0), time.perf_counter() - t0)
     elapsed = time.perf_counter() - t0
+    rebuild = 0.0
+    if done or reindex:
+        t0 = time.perf_counter()
+        db.rebuild_vector_index(conn)
+        rebuild = time.perf_counter() - t0
+        log.info("HNSW index rebuilt in %.1fs", rebuild)
 
     total, embedded = conn.execute(
         "SELECT count(*), count(embedding) FROM chunks"
@@ -81,6 +88,7 @@ def build_index(
         "rate_limited": getattr(embedder.impl, "rate_limited", 0) if embedder else 0,
         "est_tokens_sent": embedder.impl.tokens_sent if embedder else 0,
         "embed_seconds": round(elapsed, 1),
+        "index_rebuild_seconds": round(rebuild, 1),
         "chunks_in_db": total,
         "chunks_with_embedding": embedded,
     }

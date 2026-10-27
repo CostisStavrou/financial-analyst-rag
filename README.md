@@ -23,6 +23,7 @@ Then the pipeline, one command per step (run from the repo root):
 .venv/bin/python -m finrag db-init    # schema (vector(768), HNSW + full-text indexes)
 .venv/bin/python -m finrag index      # load chunks, embed with gemini-embedding-001
 .venv/bin/python -m finrag ask "What is Amcor's year end FY2020 net AR?" --ticker AMCR --year 2020
+.venv/bin/python -m finrag eval-retrieval   # FinanceBench: is the evidence in the top 20?
 ```
 
 Example (real run, 27 Oct; FinanceBench question 03882, answer $1,616m, evidence page 50):
@@ -36,7 +37,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 ```
 
 - `ask` prints the top-k chunks with a citation each: company, 10-K fiscal year, section, page (and the page number printed in the filing), plus the SEC URL. Filters: `--ticker`, `--year`, `--item 7`, `-k 10`, `--full`.
-- `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice.
+- `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice. After writing new vectors, `index` rebuilds the HNSW index (4 s for the full corpus); `index --reindex` forces a rebuild ([why](#hnsw-vs-exact-search)).
 - **Gemini quotas:** a paid key (Tier 1) embedded the whole corpus in about 4 minutes. On the free tier each chunk counts as one request: on 27 Oct it allowed about 100 chunks a minute and about 1,000 a day (`EmbedContentRequestsPerDay...FreeTier`). For a free key, `scripts/embed_daily.sh` runs once a day after the reset, resumes where it stopped, does the FinanceBench filings first and paces itself (`EMBED_RPM` / `EMBED_TPM`).
 - No Gemini key? `EMBED_PROVIDER=local` with `pip install -e ".[local]"` uses BAAI/bge-base-en-v1.5 on CPU (768-dim, slow: ~1 chunk/s). Use a separate database for it, e.g. `DATABASE_URL=.../finrag_local`; the index refuses to mix models.
 - Other commands: `stats` (chunks and embeddings per filing), `financebench` (questions covered), `page-check` (our pages vs FinanceBench evidence pages), `download --dry-run`, `db-init --reset`.
@@ -49,14 +50,14 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 | Days | Status |
 |---|---|
 | 1–4 (27–30 Oct) | **Done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, all 12,103 chunks embedded with `gemini-embedding-001` in local pgvector, `ask` with citations working end to end. |
-| 5–8 | Next: hybrid search (Postgres FTS + vector, RRF), reranking, FinanceBench baseline, table extraction. |
+| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)). Next: hybrid search (Postgres FTS + vector, RRF), reranking, table extraction. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
 
 - **Download:** 30 of 30 filings found and downloaded, 74 SEC requests, 140 MB. CVS FY2018 also has Exhibit 13 (annual report with MD&A and financials), which is fetched and parsed too.
 - **Parse:** 3,871 pages → **12,103 chunks** (3,290 of them tables), ~3.57M tokens (estimated at 4 characters per token), in ~12 s.
 - **Sections:** all 30 filings get their 10-K items detected (18–22 items each). Combined headings ("Items 10, 11, 12 and 13" at American Express) are filed under the first item; an out-of-order heading (PepsiCo FY2020 puts Item 9 after 9B) stays in the item before it.
-- **Index:** all **12,103 chunks embedded** with `gemini-embedding-001` (768 dims) in local Postgres + pgvector. The paid-tier run did 11,403 chunks in **250 s** with 214 API requests and no rate limiting. The 11,453 chunks embedded on the paid tier (a 50-chunk check, then this run) were 3,559,565 tokens, counted beforehand with Gemini's free `count_tokens`: about **$0.53** at $0.15 per 1M. The 4-characters-per-token estimate gave 3,662,068 for the same chunks, 3% high.
+- **Index:** all **12,103 chunks embedded** with `gemini-embedding-001` (768 dims) in local Postgres + pgvector. The paid-tier run did 11,403 chunks in **250 s** with 214 API requests and no rate limiting. The 11,453 chunks embedded on the paid tier (a 50-chunk check, then this run) were 3,559,565 tokens, counted beforehand with Gemini's free `count_tokens`: about **$0.53** at $0.15 per 1M (the model's launch price; Google's pricing page no longer lists `gemini-embedding-001` on 27 Oct 2026). The 4-characters-per-token estimate gave 3,662,068 for the same chunks, 3% high.
 - **Test queries** (FinanceBench questions; hits filtered to the right company and year unless stated):
 
   | Question | Evidence page (FinanceBench) | Where it came back | Figure in the chunk |
@@ -86,10 +87,11 @@ finrag/ingest/          EDGAR download, HTML parsing, chunking
 finrag/index/           embeddings (Gemini / local), Postgres schema and loading
 finrag/retrieve/        vector search with metadata filters
 finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
-finrag/eval/            FinanceBench loading, coverage, page check
+finrag/eval/            FinanceBench loading, coverage, page check, retrieval scoring
 finrag/cli.py           python -m finrag <command>
+results/                evaluation results: per-question ranks and chunk ids, no FinanceBench text
 scripts/embed_daily.sh  daily free-tier Gemini embedding run
-tests/                  parser, chunker and embedder tests
+tests/                  parser, chunker, embedder and retrieval-metric tests
 docker-compose.yml      local Postgres + pgvector
 ```
 
@@ -135,17 +137,113 @@ Chosen to overlap with FinanceBench: for each company, the 3 fiscal years with t
 
 ## Evaluation
 
-Run FinanceBench on each version and report accuracy, cost per question and latency:
+Run FinanceBench on each version and report retrieval, answer accuracy, cost per question and latency (57 in-scope questions):
 
-| Version | Accuracy | Cost / question | Latency |
-|---|---|---|---|
-| Vector only | – | – | – |
-| Hybrid | – | – | – |
-| Hybrid + rerank | – | – | – |
-| Hybrid + rerank + tables | – | – | – |
-| Agentic (+ XBRL check) | – | – | – |
+| Version | Evidence in top 5 (no filter) | Answer accuracy | Cost / question | Latency (median) |
+|---|---|---|---|---|
+| Vector only | **86%** (49/57) | – | $0.000006 (query embedding only) | 279 ms embed + 3 ms search |
+| Hybrid | – | – | – | – |
+| Hybrid + rerank | – | – | – | – |
+| Hybrid + rerank + tables | – | – | – | – |
+| Agentic (+ XBRL check) | – | – | – | – |
 
 Plus error analysis: wrong page retrieved, table misread, maths error, refusal.
+
+### Retrieval (no LLM): is the evidence in the top k?
+
+`python -m finrag eval-retrieval` (`--exact` for brute-force search). Real runs on 27 Oct 2026: 57 questions, the FinanceBench question verbatim as the query, top 20 chunks. Code: [`finrag/eval/retrieval.py`](finrag/eval/retrieval.py).
+
+- **Gold labels.** Each question has 1–3 evidence passages from FinanceBench (73 in all). Each passage is matched to our chunks in the question's filing using 60-character windows of normalised text (lowercase, letters and digits only). Gold chunks are:
+  - the chunk sharing the most windows;
+  - any chunk repeating at least half the passage (the same sentence in MD&A and the notes);
+  - other chunks on those pages sharing at least 10% of the windows (rounded up, never more than 3).
+
+  A table header shared with a table on another page doesn't count. All 73 passages match. The page check's one miss, 3M FY2022, is found now: our chunk lacks the title that opens the passage, and the denser windows (every 30 characters, the last ending at the end) fall inside the rest. Passages under 40 normalised characters would count as not found; the shortest here is 58.
+
+  Limit: gold only sees word-for-word copies. A reworded passage, or the same figures under a different table header, is not gold even when it answers the question ([examples](#where-vector-only-retrieval-misses)).
+- **Metrics.**
+  - **Page hit@k** (main): a top-k chunk is on a gold page of the right filing.
+  - **Chunk hit@k**: a gold chunk itself is in the top k.
+  - **MRR**: 1 / rank of the first page hit.
+  - **All passages@k**: for the 13 questions with several passages, every passage is found.
+- **Settings.**
+  - No filter: all 30 filings.
+  - Company filter.
+  - Company + fiscal year: the right filing, as if an oracle picked it.
+
+| Setting | hit@1 | hit@3 | hit@5 | hit@10 | hit@20 | MRR | Chunk hit@5 | All passages @5 / @20 |
+|---|---|---|---|---|---|---|---|---|
+| No filter | 53% (30) | 77% (44) | **86% (49)** | 95% (54) | 96% (55) | 0.67 | 84% (48) | 4 / 9 of 13 |
+| Company | same as no filter | | | | | | | |
+| Company + year | 54% (31) | 82% (47) | **95% (54)** | 96% (55) | 98% (56) | 0.70 | 91% (52) | 4 / 9 of 13 |
+
+- **The company filter changes nothing.** The top 20 is identical with and without it for all 57 questions. Unfiltered search never left the right company: all 285 top-5 chunks came from it, probably because the question names the company and so does every chunk's embedded header (not tested). It picked the right fiscal year for 220 of the 285 (top 1: 54 of 57).
+- **By question type** (no filter, hit@5):
+  - metrics-generated: 15/15
+  - novel-generated: 8/10
+  - domain-relevant: 26/32
+
+  Weakest company: Boeing, 4/8 (5/8 with the right filing).
+- **Several statements are the clearest gap.** 9 of the 13 questions with several passages need two or three statements, e.g. income statement + balance sheet.
+  - Every statement is in the top 5 for only 2 of the 9 (AMD FY2015, PepsiCo FY2022 EBITDA margin).
+  - With the right filing, the missing statement comes back at hits 6–10 for 5 of them. For 3M and CVS "capital intensive?" the income statement is not in the top 20.
+  - The other 4 are text questions; 2 have every passage in the top 5, hence 4 of 13 in the table.
+- **Latency and cost** (median / p95, single runs on this 8 GB Mac; timings vary from run to run):
+  - Query embedding: 279 / 425 ms (52 Gemini calls in the first run; later runs read the cache).
+  - Search, no filter: 3 / 8 ms with HNSW, 64 / 70 ms exact.
+  - Search, company + year: 4 / 5 ms (Postgres sorts the filing's rows exactly, [see below](#hnsw-vs-exact-search)).
+  - Cost: the 57 questions are 2,097 tokens by Gemini's `count_tokens` (27 Oct), about $0.000006 per question at $0.15 per 1M, `gemini-embedding-001`'s launch price. Google's pricing page no longer lists this model; at `gemini-embedding-2`'s $0.20 it would be $0.000007.
+- **Results** (per-question ranks and chunk ids, no FinanceBench text):
+  - [`results/retrieval_vector.json`](results/retrieval_vector.json)
+  - [`results/retrieval_vector_exact.json`](results/retrieval_vector_exact.json)
+  - [`results/retrieval_vector_before_reindex.json`](results/retrieval_vector_before_reindex.json)
+
+#### HNSW vs exact search
+
+- **First run: HNSW lost one question.** With no filter, the HNSW index missed 21 of the 1,140 exact top-20 results (57 questions × 20). 20 of them were from one question: AMD FY2022, operating margin. Exact search ranks the evidence 1st. HNSW returned none of AMD's top 20 and got stuck among CVS, General Mills and Verizon chunks. Effect: hit@5 84% instead of 86%.
+- **Likely cause: how the index was built.** It had been grown row by row during embedding, and every `index` run rewrote all rows: 73,933 updates for 12,103 chunks (counted before a later database restart reset the statistics). A fresh build of the same vectors in a scratch table missed 1 of 1,140. Row-by-row growth and rewrites were not tested separately.
+- **Fix.**
+  - `index` no longer rewrites unchanged rows (checked: a re-run left the update count unchanged).
+  - It rebuilds the HNSW index after writing vectors.
+- **After the rebuild**, HNSW returns the exact top 20, in the same order, for all 57 no-filter searches (1,140 of 1,140). Searches also got faster: median 22 ms before, 3 ms after (p95 104 → 8 ms).
+- **With filters, Postgres mostly skips HNSW.** `eval-retrieval` records each search's plan (`EXPLAIN`):
+  - company filter: HNSW for 21 of 57 searches (AXP, CVS, MMM, VZ);
+  - company + year: none. Postgres reads the filing's rows and sorts them, which is exact.
+
+  So the HNSW-vs-exact check only covers the 57 no-filter searches and those 21. All of them match.
+
+#### Where vector-only retrieval misses
+
+**The gold labels miss some real hits.** Checked by hand, 10 questions have the answer at hit 1 (no filter) but score lower:
+
+- Amcor gross margin and Boeing effective tax rate: in the table below (not in the top 5).
+- Boeing FY2022 segment revenue: the MD&A revenue table, with the same figures as the gold Notes table (scored at hit 4).
+- AMD FY2022 products: the same product lines in other words (hit 5).
+- American Express tax-rate change: the tax note, 24.6% → 21.6% (hit 5).
+- 3M FY2022 operating-margin drivers: the MD&A margin bridge (hit 3).
+- Hit 2, with the facts in another part of the filing:
+  - AMD FY2022 cash-flow mix: MD&A summary table;
+  - Best Buy acquisitions: MD&A text;
+  - Best Buy FY2015–17 net margin: selected financial data;
+  - Boeing FY2018 net PP&E: PP&E note, $12,645.
+
+Counting these 10 would give hit@1 40/57 (70%) and hit@5 51/57 (89%). The tables keep the automatic labels, so every version is scored the same way.
+
+The 8 questions with no evidence page in the no-filter top 5:
+
+| Why | Questions | Note |
+|---|---|---|
+| Answer retrieved, but not from FinanceBench's page | Amcor FY2023 gross margin: MD&A table, 18.5% vs 19.4%, hits 1–2. Boeing FY2022 effective tax rate: tax note, (0.6)% vs 14.7%, hit 1. | The gold is one valid source; an LLM could answer from these. |
+| Wrong year; the question gives none | Best Buy gross margins "historically": FY2017 selected data at hit 1. Boeing cyclicality: the same risk-factor sentence from FY2018 and FY2021 at hits 3 and 5. | Hit 2 for both with the year filter. |
+| Needs several statements | 3M "capital intensive?": income statement, balance sheet, cash flow. Verizon "capital intensive?": balance sheet + MD&A revenue table. | 3M: a segment table first; cash flow and balance sheet at hits 6 and 7, income statement not in the top 20. Verizon: the cash-flow statement first; balance sheet at hit 11; the revenue table not in the top 20 (hit 6 only shares its page). |
+| Wrong part of the right filing | Boeing gross margin: segment operating-margin tables came first, evidence at hit 10. Boeing primary customers: the key sentences sit inside 350–500-token risk-factor chunks; not in the top 20. | |
+
+**Next:**
+
+- Query decomposition (one sub-query per statement) for ratio questions: 3M's and CVS's income statements and Verizon's revenue table are not in the top 20.
+- Reranking the top 20, or smaller chunks, for sentences buried in long chunks (Boeing customers).
+- Hybrid search (keywords + vectors), to be measured. It can only help where the question shares words with the filing: the gross-margin evidence says "Gross profit", and vector search already puts both tax-rate notes at hit 1.
+- Extracting the company and year from the question: the right filing lifts hit@5 from 86% to 95%.
 
 ## Priorities
 

@@ -67,7 +67,8 @@ def cmd_index(args) -> None:
 
         rows = financebench.load(financebench.download(s.data_dir))
         first = financebench.question_filings(rows, load_companies())
-    print(json.dumps(build_index(s, _tickers(args), args.limit, first=first), indent=2))
+    print(json.dumps(build_index(s, _tickers(args), args.limit, first=first,
+                                 reindex=args.reindex), indent=2))
 
 
 def cmd_ask(args) -> None:
@@ -130,6 +131,57 @@ def cmd_page_check(args) -> None:
     print(json.dumps(page_check(rows, load_companies(), load_chunks(s.parsed_dir)), indent=2))
 
 
+def cmd_eval_retrieval(args) -> None:
+    from datetime import datetime
+
+    from finrag.config import ROOT
+    from finrag.eval import financebench, retrieval
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+    from finrag.ingest.build import load_chunks
+    from finrag.retrieve.vector import EF_SEARCH
+
+    s = get_settings()
+    rows = financebench.load(financebench.download(s.data_dir))
+    chunks = load_chunks(s.parsed_dir)
+    questions = retrieval.load_questions(rows, load_companies(), chunks)
+    scored = [q for q in questions if q.passages]
+    if not scored:
+        raise RuntimeError("No FinanceBench evidence matched the chunks. Run `finrag parse`.")
+    conn = db.connect(s.database_url)
+    retrieval.check_index(conn, chunks, s.embed_model)
+    results = retrieval.run(scored, make_embedder(s), conn, s.embed_model, k=args.k,
+                            exact=args.exact)
+    summary = retrieval.report(results, args.k)
+    meta = {
+        "method": "vector",
+        "search": "exact (no index)" if args.exact
+                  else f"HNSW (ef_search {EF_SEARCH}, iterative_scan relaxed_order) where the "
+                       "planner uses it, see searches_using_hnsw",
+        "embedding_model": s.embed_model,
+        "dims": s.embed_dim,
+        "k": args.k,
+        "query": "FinanceBench question, verbatim",
+        "gold": {"window": retrieval.WINDOW, "step": retrieval.STEP,
+                 "min_shared": "10% of windows, at least 1, at most 3",
+                 "repeat_share": retrieval.REPEAT_SHARE, "min_chars": retrieval.MIN_CHARS},
+        "questions_in_scope": len(questions),
+        "questions_scored": len(scored),
+        "excluded_no_evidence_found": [q.id for q in questions if not q.passages],
+        "some_evidence_not_found": [q.id for q in questions if q.passages and q.not_found],
+        "run_at": datetime.now().isoformat(timespec="seconds"),
+        "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (question text left out here)",
+    }
+    # the default k=20 runs are the ones the README cites; other k get their own files
+    name = ("retrieval_vector" + ("_exact" if args.exact else "")
+            + ("" if args.k == 20 else f"_k{args.k}"))
+    detail, public = retrieval.save(name, meta, summary, results, s.data_dir, ROOT / "results")
+    print(f"{meta['method']} search, {meta['search']}: {len(scored)} of {len(questions)} "
+          f"in-scope questions scored, top {args.k}\n")
+    print(retrieval.format_report(summary, args.k))
+    print(f"\nper-question detail: {detail}\nsummary without question text: {public}")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="finrag", description=__doc__)
     p.add_argument("-v", "--verbose", action="store_true")
@@ -153,6 +205,8 @@ def main(argv: list[str] | None = None) -> None:
     ix.add_argument("--limit", type=int, help="embed at most N chunks (smoke test)")
     ix.add_argument("--financebench-first", action="store_true",
                     help="embed filings that FinanceBench questions use first")
+    ix.add_argument("--reindex", action="store_true",
+                    help="rebuild the HNSW index even if no new vectors were written")
     ix.set_defaults(func=cmd_index)
 
     a = sub.add_parser("ask", help="retrieve the top chunks for a question, with citations")
@@ -172,6 +226,13 @@ def main(argv: list[str] | None = None) -> None:
 
     pc = sub.add_parser("page-check", help="compare chunk pages with FinanceBench evidence pages")
     pc.set_defaults(func=cmd_page_check)
+
+    er = sub.add_parser("eval-retrieval",
+                        help="FinanceBench retrieval score: is the evidence in the top k?")
+    er.add_argument("-k", type=int, default=20, choices=(1, 3, 5, 10, 20))
+    er.add_argument("--exact", action="store_true",
+                    help="exact (brute-force) search instead of the HNSW index")
+    er.set_defaults(func=cmd_eval_retrieval)
 
     args = p.parse_args(argv)
     logging.basicConfig(

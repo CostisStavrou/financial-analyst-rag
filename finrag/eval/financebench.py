@@ -31,6 +31,17 @@ def load(path: Path) -> list[dict]:
         return [json.loads(line) for line in f]
 
 
+def in_scope(rows: list[dict], companies: list[Company]) -> list[tuple[dict, Company]]:
+    """FinanceBench 10-K questions about a filing in the corpus, with their company."""
+    by_name = {c.financebench: c for c in companies}
+    out = []
+    for r in rows:
+        co = by_name.get(r["company"])
+        if r["doc_type"].lower() == "10k" and co and int(r["doc_period"]) in co.fiscal_years:
+            out.append((r, co))
+    return out
+
+
 def question_filings(rows: list[dict], companies: list[Company]) -> list[tuple[str, int]]:
     """(ticker, fiscal year) of corpus filings that FinanceBench 10-K questions use,
     most-asked first."""

@@ -70,6 +70,13 @@ def upsert_chunks(conn: psycopg.Connection, chunks: list[Chunk]) -> int:
                                  THEN chunks.embedding END,
                 embedding_model = CASE WHEN chunks.content_sha = EXCLUDED.content_sha
                                        THEN chunks.embedding_model END
+            -- Leave unchanged rows alone: every rewrite adds an HNSW entry and graph repairs.
+            WHERE (chunks.item, chunks.section, chunks.page_start, chunks.page_end,
+                   chunks.page_label, chunks.chunk_type, chunks.content_sha, chunks.source_url)
+                  IS DISTINCT FROM
+                  (EXCLUDED.item, EXCLUDED.section, EXCLUDED.page_start, EXCLUDED.page_end,
+                   EXCLUDED.page_label, EXCLUDED.chunk_type, EXCLUDED.content_sha,
+                   EXCLUDED.source_url)
             """,
             [
                 (c.id, c.accession, c.ticker, c.company, c.fiscal_year, c.document, c.item,
@@ -79,6 +86,12 @@ def upsert_chunks(conn: psycopg.Connection, chunks: list[Chunk]) -> int:
             ],
         )
     return len(chunks)
+
+
+def rebuild_vector_index(conn: psycopg.Connection) -> None:
+    """Build the HNSW graph again over all vectors. A graph grown row by row while vectors
+    are written and rewritten finds neighbours worse than one built in one go."""
+    conn.execute("REINDEX INDEX chunks_embedding_idx")
 
 
 def delete_stale_chunks(conn: psycopg.Connection, accession: str, keep_ids: list[str]) -> int:

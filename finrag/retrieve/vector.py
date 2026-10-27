@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 import psycopg
 
+EF_SEARCH = 100  # HNSW candidate list size per query
+
 
 @dataclass
 class Hit:
@@ -34,15 +36,8 @@ class Hit:
         return f"{self.company} {doc} FY{self.fiscal_year}, {self.section}, {pages}"
 
 
-def search(
-    conn: psycopg.Connection,
-    query_vec: np.ndarray,
-    model: str,
-    k: int = 5,
-    ticker: str | None = None,
-    fiscal_year: int | None = None,
-    item: str | None = None,
-) -> list[Hit]:
+def _query(query_vec: np.ndarray, model: str, k: int, ticker: str | None,
+           fiscal_year: int | None, item: str | None) -> tuple[str, dict]:
     where = ["embedding IS NOT NULL", "embedding_model = %(model)s"]
     if ticker:
         where.append("ticker = %(ticker)s")
@@ -61,10 +56,58 @@ def search(
     """
     params = {"q": query_vec, "model": model, "ticker": ticker, "fy": fiscal_year,
               "item": item, "k": k}
-    with conn.transaction():
+    return sql, params
+
+
+def _set_mode(conn: psycopg.Connection, exact: bool) -> None:
+    """Search settings for one block (rolled back afterwards, so they can't leak)."""
+    # Plan each search with its own values, as EXPLAIN in uses_hnsw() does: after five runs
+    # psycopg prepares the statement, and a cached generic plan could differ.
+    conn.execute("SET LOCAL plan_cache_mode = force_custom_plan")
+    if exact:
+        # No index scans: Postgres reads every matching row and sorts by distance.
+        conn.execute("SET LOCAL enable_indexscan = off")
+    else:
         # With filters, let the HNSW scan keep going until k rows match (pgvector >= 0.8).
         conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
-        conn.execute("SET LOCAL hnsw.ef_search = 100")
+        conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
+
+
+def search(
+    conn: psycopg.Connection,
+    query_vec: np.ndarray,
+    model: str,
+    k: int = 5,
+    ticker: str | None = None,
+    fiscal_year: int | None = None,
+    item: str | None = None,
+    exact: bool = False,
+) -> list[Hit]:
+    """Top k chunks by cosine similarity. `exact` skips the HNSW index and compares the query
+    with every matching row, to measure what the approximate index loses."""
+    sql, params = _query(query_vec, model, k, ticker, fiscal_year, item)
+    # Rolled back, not released: inside a caller's transaction SET LOCAL would otherwise last
+    # until the caller commits.
+    with conn.transaction(force_rollback=True):
+        _set_mode(conn, exact)
         rows = conn.execute(sql, params).fetchall()
     hits = [Hit(*r[:-1], score=float(r[-1])) for r in rows]
     return sorted(hits, key=lambda h: h.score, reverse=True)  # relaxed_order may shuffle
+
+
+def uses_hnsw(
+    conn: psycopg.Connection,
+    query_vec: np.ndarray,
+    model: str,
+    k: int = 5,
+    ticker: str | None = None,
+    fiscal_year: int | None = None,
+    item: str | None = None,
+) -> bool:
+    """Whether Postgres answers this (non-exact) search from the HNSW index. With a selective
+    filter the planner may read just the filter's rows and sort them, which is exact."""
+    sql, params = _query(query_vec, model, k, ticker, fiscal_year, item)
+    with conn.transaction(force_rollback=True):
+        _set_mode(conn, exact=False)
+        plan = conn.execute(f"EXPLAIN {sql}", params).fetchall()
+    return any("chunks_embedding_idx" in row[0] for row in plan)
