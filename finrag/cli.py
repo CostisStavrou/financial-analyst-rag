@@ -79,8 +79,9 @@ def cmd_ask(args) -> None:
 
     s = get_settings()
     conn = db.connect(s.database_url)
+    embedder = make_embedder(s)  # SDK import and client set-up kept out of the timing
     t0 = time.perf_counter()
-    qvec = make_embedder(s).embed_query(args.question)
+    qvec = embedder.embed_query(args.question)
     t1 = time.perf_counter()
     hits = search(conn, qvec, s.embed_model, k=args.k, ticker=args.ticker and args.ticker.upper(),
                   fiscal_year=args.year, item=args.item and args.item.upper())

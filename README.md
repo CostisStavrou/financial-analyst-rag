@@ -37,7 +37,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 
 - `ask` prints the top-k chunks with a citation each: company, 10-K fiscal year, section, page (and the page number printed in the filing), plus the SEC URL. Filters: `--ticker`, `--year`, `--item 7`, `-k 10`, `--full`.
 - `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice.
-- **Free-tier Gemini key:** each chunk counts as one request. On 27 Oct the free tier allowed about 100 chunks a minute and stopped bulk embedding for the day at `EmbedContentRequestsPerDay...FreeTier`, after about 650 new chunks (roughly 1,000 requests a day, failed ones included). Run **`scripts/embed_daily.sh`** once a day after the reset (midnight Pacific time: 07:00 UK until 1 Nov, 08:00 after). It resumes where the last run stopped, embeds the 21 filings that FinanceBench questions use first (`index --financebench-first`), paces itself under the per-minute limits (`EMBED_RPM` / `EMBED_TPM`) and stops cleanly at the daily cap. It needs Docker running and doesn't start Docker itself. A paid key embeds the whole corpus in one go: the 11,453 chunks left are **3,559,565 tokens** (measured with Gemini's free `count_tokens`), so about **$0.53** at the $0.15 per 1M tokens Google announced for `gemini-embedding-001`.
+- **Gemini quotas:** a paid key (Tier 1) embedded the whole corpus in about 4 minutes. On the free tier each chunk counts as one request: on 27 Oct it allowed about 100 chunks a minute and about 1,000 a day (`EmbedContentRequestsPerDay...FreeTier`). For a free key, `scripts/embed_daily.sh` runs once a day after the reset, resumes where it stopped, does the FinanceBench filings first and paces itself (`EMBED_RPM` / `EMBED_TPM`).
 - No Gemini key? `EMBED_PROVIDER=local` with `pip install -e ".[local]"` uses BAAI/bge-base-en-v1.5 on CPU (768-dim, slow: ~1 chunk/s). Use a separate database for it, e.g. `DATABASE_URL=.../finrag_local`; the index refuses to mix models.
 - Other commands: `stats` (chunks and embeddings per filing), `financebench` (questions covered), `page-check` (our pages vs FinanceBench evidence pages), `download --dry-run`, `db-init --reset`.
 - Tests: `.venv/bin/python -m pytest`.
@@ -48,7 +48,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 
 | Days | Status |
 |---|---|
-| 1–4 (27–30 Oct) | **Done 27 Oct, except embedding the full corpus**: setup, EDGAR downloader, parser/chunker with pages and sections, pgvector index, `ask` with citations working end to end on Gemini embeddings. 650 of 12,103 chunks embedded so far (Amcor FY2020 complete). The rest goes in daily free-tier runs: 7,840 chunks left in the FinanceBench filings (~8 days), 11,453 in total (~12 days). |
+| 1–4 (27–30 Oct) | **Done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, all 12,103 chunks embedded with `gemini-embedding-001` in local pgvector, `ask` with citations working end to end. |
 | 5–8 | Next: hybrid search (Postgres FTS + vector, RRF), reranking, FinanceBench baseline, table extraction. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
@@ -56,8 +56,18 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 - **Download:** 30 of 30 filings found and downloaded, 74 SEC requests, 140 MB. CVS FY2018 also has Exhibit 13 (annual report with MD&A and financials), which is fetched and parsed too.
 - **Parse:** 3,871 pages → **12,103 chunks** (3,290 of them tables), ~3.57M tokens (estimated at 4 characters per token), in ~12 s.
 - **Sections:** all 30 filings get their 10-K items detected (18–22 items each). Combined headings ("Items 10, 11, 12 and 13" at American Express) are filed under the first item; an out-of-order heading (PepsiCo FY2020 puts Item 9 after 9B) stays in the item before it.
-- **Index:** all 12,103 chunks loaded into Postgres. Gemini `gemini-embedding-001` (768 dims): 650 embedded (Amcor FY2020 all 380, Amcor FY2022 220, 3M FY2018 50) before the free-tier daily cap. Token estimate check: the 4-characters-per-token estimate gives 3,662,068 for the 11,453 chunks still to embed; `count_tokens` measures 3,559,565 (3% lower).
-- **First query, end to end:** FinanceBench's Amcor FY2020 net-receivables question returns the balance sheet as hit 1, on page 50 (the page FinanceBench cites), with "Trade receivables, net 1,615.9" (answer: $1,616m). Query embedding 701 ms, vector search 16 ms (one run, not a benchmark).
+- **Index:** all **12,103 chunks embedded** with `gemini-embedding-001` (768 dims) in local Postgres + pgvector. The paid-tier run did 11,403 chunks in **250 s** with 214 API requests and no rate limiting. The tokens embedded, counted beforehand with Gemini's free `count_tokens`, were 3,559,565, which is about **$0.53** at $0.15 per 1M. The 4-characters-per-token estimate gave 3,662,068 for the same chunks, 3% high.
+- **Test queries** (FinanceBench questions; hits filtered to the right company and year unless stated):
+
+  | Question | Evidence page (FinanceBench) | Where it came back | Figure in the chunk |
+  |---|---|---|---|
+  | Amcor FY2020 net receivables | 50 | hit 1, p. 50 | Trade receivables, net 1,615.9 (answer $1,616m) |
+  | 3M FY2018 capital expenditure | 60 | hit 1, p. 60 | Purchases of PP&E (1,577) (answer $1,577m) |
+  | AmEx effective tax rate FY2021→FY2022 | 44 | hit 3, p. 44 | 21.6% vs 24.6% (answer: down from 24.6% to 21.6%) |
+  | Boeing FY2022 legal battles (**no filters**) | 113 | hits 2–3, p. 110–111 (2-page offset vs their PDF); all 5 hits Boeing | – |
+  | General Mills FY2022 retention ratio | 45 and 49 | p. 49 (cash flow) hit 1; **p. 45 (income statement) not in the top 5** | – |
+
+  Fresh query embedding took 347–701 ms and the vector search 12–39 ms (single runs). Repeated questions come from the cache in ~2 ms. The General Mills miss, a question that needs two statements, is the kind hybrid search and query decomposition should fix.
 - **Offline model (bge-base on CPU):** works, but ~1 chunk/s on this 8 GB Mac, too slow for the full corpus.
 - **Page check against FinanceBench** (`python -m finrag page-check`): for the 57 in-scope questions, 72 of 73 evidence passages were found in our chunks; **50 on the same page** as FinanceBench's PDF, **57 within ±1 page**. Most misses are offsets from cover pages in the company PDFs, plus CVS FY2018 where FinanceBench's PDF appends Exhibit 13 and we number it separately.
 
