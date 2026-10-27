@@ -31,6 +31,19 @@ def load(path: Path) -> list[dict]:
         return [json.loads(line) for line in f]
 
 
+def question_filings(rows: list[dict], companies: list[Company]) -> list[tuple[str, int]]:
+    """(ticker, fiscal year) of corpus filings that FinanceBench 10-K questions use,
+    most-asked first."""
+    tickers = {c.financebench: c.ticker for c in companies}
+    years = {c.ticker: set(c.fiscal_years) for c in companies}
+    counts = Counter(
+        (tickers[r["company"]], int(r["doc_period"]))
+        for r in rows
+        if r["doc_type"].lower() == "10k" and r["company"] in tickers
+    )
+    return [f for f, _ in counts.most_common() if f[1] in years[f[0]]]
+
+
 def coverage(rows: list[dict], companies: list[Company]) -> dict:
     """How many FinanceBench 10-K questions the configured corpus can answer."""
     wanted = {(c.financebench, y) for c in companies for y in c.fiscal_years}

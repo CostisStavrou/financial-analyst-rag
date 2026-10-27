@@ -16,8 +16,9 @@ log = logging.getLogger(__name__)
 
 def build_index(
     settings: Settings, tickers: set[str] | None = None, limit: int | None = None,
-    batch: int = 200,
+    batch: int = 200, first: list[tuple[str, int]] | None = None,
 ) -> dict:
+    """`first`: (ticker, fiscal year) filings to embed before the rest, in that order."""
     conn = db.connect(settings.database_url)
     db.init_schema(conn, settings.embed_dim, settings.embed_model)
 
@@ -43,6 +44,9 @@ def build_index(
         )
     }
     todo = [c for c in chunks if c.id in todo_ids]
+    if first:
+        rank = {f: n for n, f in enumerate(first)}
+        todo.sort(key=lambda c: rank.get((c.ticker, c.fiscal_year), len(rank)))
     if limit is not None:
         todo = todo[:limit]
     log.info("%d chunks loaded, %d need embeddings (%s)", len(chunks), len(todo),

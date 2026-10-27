@@ -41,3 +41,19 @@ def test_pacing_caps_batch_and_waits(monkeypatch):
     out = e.embed([str(i) for i in range(25)], "RETRIEVAL_DOCUMENT")
     assert len(out) == 25
     assert calls == [10, 10, 5]  # never more than 10 texts per request
+
+
+def test_financebench_filings_first():
+    from finrag.config import Company
+    from finrag.eval.financebench import question_filings
+
+    cos = [Company("3M", "MMM", 1, "3M", (2018, 2022)), Company("AMD", "AMD", 2, "AMD", (2022,))]
+    rows = [
+        {"company": "AMD", "doc_type": "10k", "doc_period": 2022},
+        {"company": "AMD", "doc_type": "10k", "doc_period": 2022},
+        {"company": "3M", "doc_type": "10k", "doc_period": 2018},
+        {"company": "3M", "doc_type": "10k", "doc_period": 2015},  # year not in corpus
+        {"company": "3M", "doc_type": "10q", "doc_period": 2022},  # not a 10-K
+        {"company": "Nike", "doc_type": "10k", "doc_period": 2022},  # company not in corpus
+    ]
+    assert question_filings(rows, cos) == [("AMD", 2022), ("MMM", 2018)]

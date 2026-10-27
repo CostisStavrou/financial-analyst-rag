@@ -60,7 +60,14 @@ def cmd_db_init(args) -> None:
 def cmd_index(args) -> None:
     from finrag.index.build import build_index
 
-    print(json.dumps(build_index(get_settings(), _tickers(args), args.limit), indent=2))
+    s = get_settings()
+    first = None
+    if args.financebench_first:
+        from finrag.eval import financebench
+
+        rows = financebench.load(financebench.download(s.data_dir))
+        first = financebench.question_filings(rows, load_companies())
+    print(json.dumps(build_index(s, _tickers(args), args.limit, first=first), indent=2))
 
 
 def cmd_ask(args) -> None:
@@ -143,6 +150,8 @@ def main(argv: list[str] | None = None) -> None:
     ix = sub.add_parser("index", help="load chunks into Postgres and embed them")
     ix.add_argument("--tickers", nargs="*")
     ix.add_argument("--limit", type=int, help="embed at most N chunks (smoke test)")
+    ix.add_argument("--financebench-first", action="store_true",
+                    help="embed filings that FinanceBench questions use first")
     ix.set_defaults(func=cmd_index)
 
     a = sub.add_parser("ask", help="retrieve the top chunks for a question, with citations")

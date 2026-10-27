@@ -37,7 +37,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 
 - `ask` prints the top-k chunks with a citation each: company, 10-K fiscal year, section, page (and the page number printed in the filing), plus the SEC URL. Filters: `--ticker`, `--year`, `--item 7`, `-k 10`, `--full`.
 - `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice.
-- **Free-tier Gemini key:** each chunk counts as one request. On 27 Oct the free tier allowed about 100 chunks a minute and stopped bulk embedding for the day at `EmbedContentRequestsPerDay...FreeTier`, after about 650 new chunks (roughly 1,000 requests a day, failed ones included). `index` resumes where it stopped. Set `EMBED_RPM` / `EMBED_TPM` in `.env` to pace under the per-minute limits. A paid key embeds the whole corpus in one go: about 2.9M tokens, extrapolated from a 60-chunk `count_tokens` sample, so roughly $0.45 at the $0.15 per 1M tokens Google announced for `gemini-embedding-001`.
+- **Free-tier Gemini key:** each chunk counts as one request. On 27 Oct the free tier allowed about 100 chunks a minute and stopped bulk embedding for the day at `EmbedContentRequestsPerDay...FreeTier`, after about 650 new chunks (roughly 1,000 requests a day, failed ones included). Run **`scripts/embed_daily.sh`** once a day after the reset (midnight Pacific time: 07:00 UK until 1 Nov, 08:00 after). It resumes where the last run stopped, embeds the 21 filings that FinanceBench questions use first (`index --financebench-first`), paces itself under the per-minute limits (`EMBED_RPM` / `EMBED_TPM`) and stops cleanly at the daily cap. It needs Docker running and doesn't start Docker itself. A paid key embeds the whole corpus in one go: about 2.9M tokens, extrapolated from a 60-chunk `count_tokens` sample, so roughly $0.45 at the $0.15 per 1M tokens Google announced for `gemini-embedding-001`.
 - No Gemini key? `EMBED_PROVIDER=local` with `pip install -e ".[local]"` uses BAAI/bge-base-en-v1.5 on CPU (768-dim, slow: ~1 chunk/s). Use a separate database for it, e.g. `DATABASE_URL=.../finrag_local`; the index refuses to mix models.
 - Other commands: `stats` (chunks and embeddings per filing), `financebench` (questions covered), `page-check` (our pages vs FinanceBench evidence pages), `download --dry-run`, `db-init --reset`.
 - Tests: `.venv/bin/python -m pytest`.
@@ -48,7 +48,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 
 | Days | Status |
 |---|---|
-| 1–4 (27–30 Oct) | **Done 27 Oct, except embedding the full corpus**: setup, EDGAR downloader, parser/chunker with pages and sections, pgvector index, `ask` with citations working end to end on Gemini embeddings. 650 of 12,103 chunks embedded so far (Amcor FY2020 complete); the free-tier daily quota stopped the rest. |
+| 1–4 (27–30 Oct) | **Done 27 Oct, except embedding the full corpus**: setup, EDGAR downloader, parser/chunker with pages and sections, pgvector index, `ask` with citations working end to end on Gemini embeddings. 650 of 12,103 chunks embedded so far (Amcor FY2020 complete). The rest goes in daily free-tier runs: 7,840 chunks left in the FinanceBench filings (~8 days), 11,453 in total (~12 days). |
 | 5–8 | Next: hybrid search (Postgres FTS + vector, RRF), reranking, FinanceBench baseline, table extraction. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
@@ -78,7 +78,8 @@ finrag/retrieve/        vector search with metadata filters
 finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
 finrag/eval/            FinanceBench loading, coverage, page check
 finrag/cli.py           python -m finrag <command>
-tests/                  parser and chunker tests
+scripts/embed_daily.sh  daily free-tier Gemini embedding run
+tests/                  parser, chunker and embedder tests
 docker-compose.yml      local Postgres + pgvector
 ```
 
