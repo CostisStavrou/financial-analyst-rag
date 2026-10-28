@@ -9,6 +9,10 @@ import psycopg
 
 EF_SEARCH = 100  # HNSW candidate list size per query
 
+# chunks columns for a Hit, in field order (the score comes last)
+COLUMNS = ("id, ticker, company, fiscal_year, document, section, page_start, page_end, "
+           "page_label, chunk_type, content, source_url")
+
 
 @dataclass
 class Hit:
@@ -46,8 +50,7 @@ def _query(query_vec: np.ndarray, model: str, k: int, ticker: str | None,
     if item:
         where.append("item = %(item)s")
     sql = f"""
-        SELECT id, ticker, company, fiscal_year, document, section, page_start, page_end,
-               page_label, chunk_type, content, source_url,
+        SELECT {COLUMNS},
                1 - (embedding <=> %(q)s) AS score
         FROM chunks
         WHERE {' AND '.join(where)}

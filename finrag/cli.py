@@ -76,19 +76,28 @@ def cmd_ask(args) -> None:
 
     from finrag.index import db
     from finrag.index.embed import make_embedder
-    from finrag.retrieve.vector import search
+    from finrag.retrieve import hybrid, keyword, vector
 
     s = get_settings()
     conn = db.connect(s.database_url)
-    embedder = make_embedder(s)  # SDK import and client set-up kept out of the timing
-    t0 = time.perf_counter()
-    qvec = embedder.embed_query(args.question)
+    f = {"ticker": args.ticker and args.ticker.upper(), "fiscal_year": args.year,
+         "item": args.item and args.item.upper()}
+    embed = ""
+    if args.method != "keyword":
+        embedder = make_embedder(s)  # SDK import and client set-up kept out of the timing
+        t0 = time.perf_counter()
+        qvec = embedder.embed_query(args.question)
+        embed = f" | embed {1000 * (time.perf_counter() - t0):.0f} ms"
     t1 = time.perf_counter()
-    hits = search(conn, qvec, s.embed_model, k=args.k, ticker=args.ticker and args.ticker.upper(),
-                  fiscal_year=args.year, item=args.item and args.item.upper())
+    if args.method == "vector":
+        hits = vector.search(conn, qvec, s.embed_model, k=args.k, **f)
+    elif args.method == "keyword":
+        hits = keyword.search(conn, args.question, k=args.k, **f)
+    else:
+        hits = hybrid.search(conn, args.question, qvec, s.embed_model, k=args.k, **f).hits
     t2 = time.perf_counter()
     print(f"Q: {args.question}")
-    print(f"   {len(hits)} hits | embed {1000 * (t1 - t0):.0f} ms | search {1000 * (t2 - t1):.0f} ms\n")
+    print(f"   {len(hits)} hits ({args.method}){embed} | search {1000 * (t2 - t1):.0f} ms\n")
     for n, h in enumerate(hits, 1):
         print(f"[{n}] score {h.score:.3f} | {h.citation()} | {h.chunk_type}")
         body = h.content if args.full else textwrap.shorten(h.content, 600, placeholder=" ...")
@@ -131,6 +140,19 @@ def cmd_page_check(args) -> None:
     print(json.dumps(page_check(rows, load_companies(), load_chunks(s.parsed_dir)), indent=2))
 
 
+def _git_version() -> str:
+    import subprocess
+
+    from finrag.config import ROOT
+
+    def git(*a: str) -> str:
+        return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True,
+                              check=False).stdout
+
+    dirty = git("status", "--porcelain", "--", "finrag").strip()
+    return git("rev-parse", "--short", "HEAD").strip() + (" + uncommitted changes" if dirty else "")
+
+
 def cmd_eval_retrieval(args) -> None:
     from datetime import datetime
 
@@ -139,8 +161,11 @@ def cmd_eval_retrieval(args) -> None:
     from finrag.index import db
     from finrag.index.embed import make_embedder
     from finrag.ingest.build import load_chunks
+    from finrag.retrieve import hybrid, keyword
     from finrag.retrieve.vector import EF_SEARCH
 
+    if (args.grid or args.timing) and args.method != "hybrid":
+        raise ValueError("--grid and --timing need --method hybrid")
     s = get_settings()
     rows = financebench.load(financebench.download(s.data_dir))
     chunks = load_chunks(s.parsed_dir)
@@ -150,11 +175,48 @@ def cmd_eval_retrieval(args) -> None:
         raise RuntimeError("No FinanceBench evidence matched the chunks. Run `finrag parse`.")
     conn = db.connect(s.database_url)
     retrieval.check_index(conn, chunks, s.embed_model)
+    if args.method == "hybrid":
+        retrieval.check_keyword_index(conn, chunks)
+    exact = "_exact" if args.exact else ""
+    if args.grid:
+        grid = retrieval.fusion_grid(scored, make_embedder(s), conn, s.embed_model, k=args.k,
+                                     exact=args.exact)
+        meta = {"method": "hybrid fusion sensitivity check (fixed before any hybrid run)",
+                "rrf_k": retrieval.GRID_RRF_K, "depth": retrieval.GRID_DEPTH, "k": args.k,
+                "vector_leg": "exact" if args.exact else "HNSW where the planner uses it",
+                "questions_scored": len(scored), "code": _git_version(),
+                "run_at": datetime.now().isoformat(timespec="seconds")}
+        name = f"retrieval_hybrid_grid{exact}" + ("" if args.k == 20 else f"_k{args.k}")
+        _, public = retrieval.save(name, meta, grid, [], s.data_dir, ROOT / "results")
+        print(retrieval.format_grid(grid, args.k))
+        print(f"\nsummary: {public}")
+        return
+    if args.timing:
+        import os
+
+        load = [round(x, 1) for x in os.getloadavg()]
+        timing = retrieval.time_searches(scored, make_embedder(s), conn, s.embed_model,
+                                         k=args.k, passes=args.timing)
+        meta = {"method": "search latency: vector leg, keyword leg, hybrid (legs one after "
+                          "the other, plus fusion), each leg at hybrid depth",
+                "passes": f"1 warm-up, then {args.timing} timed passes over every question",
+                "depth_per_leg": hybrid.DEPTH, "k": args.k,
+                "vector_leg": "HNSW where the planner uses it",
+                "questions": len(scored), "code": _git_version(),
+                "load_average_1_5_15min": {"before": load,
+                                           "after": [round(x, 1) for x in os.getloadavg()]},
+                "machine": "Postgres in Docker on the developer's Mac",
+                "run_at": datetime.now().isoformat(timespec="seconds")}
+        _, public = retrieval.save("latency_hybrid", meta, timing, [], s.data_dir,
+                                   ROOT / "results")
+        print(retrieval.format_latency(timing))
+        print(f"\nsummary: {public}")
+        return
     results = retrieval.run(scored, make_embedder(s), conn, s.embed_model, k=args.k,
-                            exact=args.exact)
+                            exact=args.exact, method=args.method)
     summary = retrieval.report(results, args.k)
     meta = {
-        "method": "vector",
+        "method": args.method,
         "search": "exact (no index)" if args.exact
                   else f"HNSW (ef_search {EF_SEARCH}, iterative_scan relaxed_order) where the "
                        "planner uses it, see searches_using_hnsw",
@@ -170,15 +232,43 @@ def cmd_eval_retrieval(args) -> None:
         "excluded_no_evidence_found": [q.id for q in questions if not q.passages],
         "some_evidence_not_found": [q.id for q in questions if q.passages and q.not_found],
         "run_at": datetime.now().isoformat(timespec="seconds"),
+        "code": _git_version(),
         "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (question text left out here)",
     }
+    if args.method == "hybrid":
+        meta["search"] = f"vector leg: {meta['search']}"
+        meta["keyword"] = {
+            "scorer": "BM25, Lucene idf ln(1 + (N - df + 0.5) / (df + 0.5))",
+            "k1": keyword.K1, "b": keyword.B,
+            "text": "Chunk.embed_text (filing/section/page header + content), the text the "
+                    "embedding model sees",
+            "terms": "Postgres english text search; a chunk matches on any question term",
+            "query": "FinanceBench question verbatim, each term weighted by its count in it",
+            "tf_dl": "lexeme positions",
+            "statistics": "N, df, avgdl over the whole corpus, also when filtered",
+            "ties": "score rounded to 9 decimals, then md5(id)",
+            "index": {**keyword.corpus_stats(conn), "version": db.keyword_version(conn)},
+        }
+        meta["fusion"] = {
+            "method": "reciprocal rank fusion", "rrf_k": hybrid.RRF_K,
+            "depth_per_leg": hybrid.DEPTH, "weights": "equal",
+            "ranks": "1-based; equal scores within a leg share a rank",
+            "ties": "better vector rank, then better keyword rank, then md5(id)",
+            "legs": "run one after the other; search_ms is their sum",
+        }
+        meta["hnsw_index_filenode"] = conn.execute(
+            "SELECT pg_relation_filenode('chunks_embedding_idx')").fetchone()[0]
+        meta["vector_leg_vs_baseline"] = retrieval.same_as_baseline(
+            results, ROOT / "results" / f"retrieval_vector{exact}.json")
     # the default k=20 runs are the ones the README cites; other k get their own files
-    name = ("retrieval_vector" + ("_exact" if args.exact else "")
-            + ("" if args.k == 20 else f"_k{args.k}"))
+    name = (f"retrieval_{args.method}{exact}" + ("" if args.k == 20 else f"_k{args.k}"))
     detail, public = retrieval.save(name, meta, summary, results, s.data_dir, ROOT / "results")
     print(f"{meta['method']} search, {meta['search']}: {len(scored)} of {len(questions)} "
           f"in-scope questions scored, top {args.k}\n")
     print(retrieval.format_report(summary, args.k))
+    if args.method == "hybrid" and (same := meta["vector_leg_vs_baseline"]):
+        print(f"\nvector leg vs {same['file']}: {same['identical']}/{same['searches']} top-"
+              f"{same['top']} lists identical")
     print(f"\nper-question detail: {detail}\nsummary without question text: {public}")
 
 
@@ -216,6 +306,7 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--year", type=int, help="fiscal year")
     a.add_argument("--item", help="10-K item, e.g. 7 or 8")
     a.add_argument("--full", action="store_true", help="print whole chunks")
+    a.add_argument("--method", choices=("vector", "keyword", "hybrid"), default="vector")
     a.set_defaults(func=cmd_ask)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")
@@ -231,7 +322,13 @@ def main(argv: list[str] | None = None) -> None:
                         help="FinanceBench retrieval score: is the evidence in the top k?")
     er.add_argument("-k", type=int, default=20, choices=(1, 3, 5, 10, 20))
     er.add_argument("--exact", action="store_true",
-                    help="exact (brute-force) search instead of the HNSW index")
+                    help="exact (brute-force) vector search instead of the HNSW index")
+    er.add_argument("--method", choices=("vector", "hybrid"), default="vector",
+                    help="hybrid also scores its vector and keyword legs")
+    er.add_argument("--grid", action="store_true",
+                    help="hybrid only: fusion sensitivity check over RRF k and depth")
+    er.add_argument("--timing", type=int, metavar="PASSES",
+                    help="hybrid only: time each search over PASSES passes after a warm-up")
     er.set_defaults(func=cmd_eval_retrieval)
 
     args = p.parse_args(argv)

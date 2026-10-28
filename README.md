@@ -24,6 +24,7 @@ Then the pipeline, one command per step (run from the repo root):
 .venv/bin/python -m finrag index      # load chunks, embed with gemini-embedding-001
 .venv/bin/python -m finrag ask "What is Amcor's year end FY2020 net AR?" --ticker AMCR --year 2020
 .venv/bin/python -m finrag eval-retrieval   # FinanceBench: is the evidence in the top 20?
+.venv/bin/python -m finrag eval-retrieval --method hybrid   # same, for BM25 + vector (RRF)
 ```
 
 Example (real run, 27 Oct; FinanceBench question 03882, answer $1,616m, evidence page 50):
@@ -50,7 +51,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 | Days | Status |
 |---|---|
 | 1–4 (27–30 Oct) | **Done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, all 12,103 chunks embedded with `gemini-embedding-001` in local pgvector, `ask` with citations working end to end. |
-| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)). Next: hybrid search (Postgres FTS + vector, RRF), reranking, table extraction. |
+| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)); hybrid search (BM25 in Postgres + vector, RRF) built and measured: worse than vector alone ([results](#results-hybrid-is-worse-than-vector-alone)). Next: reranking, table extraction. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
 
@@ -68,7 +69,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
   | Boeing FY2022 legal battles (**no filters**) | 113 | hits 2–3, p. 110–111 (2-page offset vs their PDF); all 5 hits Boeing | – |
   | General Mills FY2022 retention ratio | 45 and 49 | p. 49 (cash flow) hit 1; **p. 45 (income statement) not in the top 5** | – |
 
-  Fresh query embedding took 259–701 ms and the vector search 12–39 ms (single runs). Repeated questions come from the cache in ~2 ms. The General Mills miss, a question that needs two statements, is the kind hybrid search and query decomposition should fix.
+  Fresh query embedding took 259–701 ms and the vector search 12–39 ms (single runs). Repeated questions come from the cache in ~2 ms. The General Mills miss, a question that needs two statements, is the kind query decomposition should fix (hybrid search, [measured later](#hybrid-search-keyword--vector), doesn't help).
 - **Offline model (bge-base on CPU):** works, but ~1 chunk/s on this 8 GB Mac, too slow for the full corpus.
 - **Page check against FinanceBench** (`python -m finrag page-check`): for the 57 in-scope questions, 72 of 73 evidence passages were found in our chunks; **50 on the same page** as FinanceBench's PDF, **57 within ±1 page**. Most misses are offsets from cover pages in the company PDFs, plus CVS FY2018 where FinanceBench's PDF appends Exhibit 13 and we number it separately.
 
@@ -77,7 +78,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 - **Download** ([`finrag/ingest/edgar.py`](finrag/ingest/edgar.py)): `data.sec.gov/submissions` for the filing list, the filing's `-index.htm` for its documents, then the 10-K HTML (plus any `EX-13`). Original 10-Ks only, no amendments. Fiscal year = the year the period ends (Best Buy FY2023 ended 28 Jan 2023), checked against FinanceBench's own accession numbers for 3M and AMD.
 - **Parse** ([`finrag/ingest/parse_html.py`](finrag/ingest/parse_html.py)): HTML → ordered paragraphs and tables. Pages come from the filing's CSS page breaks; the printed page number in the footer is kept as `page_label`. Hidden inline-XBRL headers are dropped. 10-K items are found from "Item 7." style headings, ignoring the table of contents. Filings converted from PDF (General Mills FY2022: every line an absolutely positioned `<div>`, no `<table>` tags) are rebuilt from x/y coordinates into lines, paragraphs and table rows.
 - **Chunk** ([`finrag/ingest/chunk.py`](finrag/ingest/chunk.py)): ~500-token text chunks within one section, a short paragraph of overlap; every table is its own chunk with its caption (long tables split by rows, header repeated). Each chunk keeps company, ticker, fiscal year, accession, document, item, section, page range, printed page and SEC URL. The embedded text starts with a one-line header (company, year, section, page).
-- **Index** ([`finrag/index/`](finrag/index)): Postgres `chunks` table with `vector(768)` (HNSW, cosine) and a generated `tsvector` column (GIN) ready for hybrid search.
+- **Index** ([`finrag/index/`](finrag/index)): Postgres `chunks` table with `vector(768)` (HNSW, cosine), plus materialised views for BM25 keyword search (`keyword_docs`, `keyword_postings`), rebuilt by `finrag index`.
 
 ## Repo layout
 
@@ -85,13 +86,13 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 config/companies.toml   corpus: companies, CIKs, fiscal years
 finrag/ingest/          EDGAR download, HTML parsing, chunking
 finrag/index/           embeddings (Gemini / local), Postgres schema and loading
-finrag/retrieve/        vector search with metadata filters
+finrag/retrieve/        vector search with metadata filters, BM25 keyword search, hybrid (RRF)
 finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
 finrag/eval/            FinanceBench loading, coverage, page check, retrieval scoring
 finrag/cli.py           python -m finrag <command>
 results/                evaluation results: per-question ranks and chunk ids, no FinanceBench text
 scripts/embed_daily.sh  daily free-tier Gemini embedding run
-tests/                  parser, chunker, embedder and retrieval-metric tests
+tests/                  parser, chunker, embedder, retrieval-metric and fusion tests; BM25 tests run against the local database when it is up
 docker-compose.yml      local Postgres + pgvector
 ```
 
@@ -130,7 +131,7 @@ Chosen to overlap with FinanceBench: for each company, the 3 fiscal years with t
 
 1. **Ingest**: download 10-Ks, parse sections, extract **tables as structured data** (Document AI or Gemini), keep page numbers.
 2. **Index**: chunks + embeddings (`gemini-embedding-001`) in **pgvector** (AlloyDB or Cloud SQL), plus Postgres full-text search, plus metadata (company, year, section, page).
-3. **Retrieve**: hybrid search (keyword + vector, Reciprocal Rank Fusion), then reranking.
+3. **Retrieve**: vector search with company/year filters, then reranking. Hybrid search (BM25 + vector, Reciprocal Rank Fusion) is built but lowered hit@5 from 86% to 53% on FinanceBench ([why](#results-hybrid-is-worse-than-vector-alone)), so it is off by default.
 4. **Agents** (Google Agent Development Kit): planner → retriever → calculator → verifier. Model routing: cheaper Gemini model for simple steps, stronger one for reasoning.
 5. **Verify**: compare numbers found in the text with SEC XBRL figures; flag disagreements; say "I don't know" when the answer isn't there.
 6. **Serve**: Cloud Run web app; answers cite company, year and page.
@@ -142,9 +143,9 @@ Run FinanceBench on each version and report retrieval, answer accuracy, cost per
 | Version | Evidence in top 5 (no filter) | Answer accuracy | Cost / question | Latency (median) |
 |---|---|---|---|---|
 | Vector only | **86%** (49/57) | – | $0.000006 (query embedding only) | 279 ms embed + 3 ms search |
-| Hybrid | – | – | – | – |
-| Hybrid + rerank | – | – | – | – |
-| Hybrid + rerank + tables | – | – | – | – |
+| Hybrid (BM25 + vector, RRF) | 53% (30/57) ([why lower](#results-hybrid-is-worse-than-vector-alone)) | – | $0.000006 (query embedding only) | 279 ms embed + 124 ms search |
+| Vector + rerank | – | – | – | – |
+| Vector + rerank + tables | – | – | – | – |
 | Agentic (+ XBRL check) | – | – | – | – |
 
 Plus error analysis: wrong page retrieved, table misread, maths error, refusal.
@@ -242,8 +243,94 @@ The 8 questions with no evidence page in the no-filter top 5:
 
 - Query decomposition (one sub-query per statement) for ratio questions: 3M's and CVS's income statements and Verizon's revenue table are not in the top 20.
 - Reranking the top 20, or smaller chunks, for sentences buried in long chunks (Boeing customers).
-- Hybrid search (keywords + vectors), to be measured. It can only help where the question shares words with the filing: the gross-margin evidence says "Gross profit", and vector search already puts both tax-rate notes at hit 1.
+- Hybrid search (keywords + vectors): measured [below](#hybrid-search-keyword--vector). It lowers hit@5 from 86% to 53%.
 - Extracting the company and year from the question: the right filing lifts hit@5 from 86% to 95%.
+
+### Hybrid search: keyword + vector
+
+`python -m finrag eval-retrieval --method hybrid` (`ask --method keyword|hybrid` for single questions). Code: [`finrag/retrieve/keyword.py`](finrag/retrieve/keyword.py), [`finrag/retrieve/hybrid.py`](finrag/retrieve/hybrid.py).
+
+#### Decided before the first run
+
+The 57 questions are the only evaluation set, so every choice below was fixed, after three independent design reviews, before any keyword or hybrid result was seen. Nothing is tuned on the 57. A change made after seeing results would be a new, labelled row.
+
+- **Keyword leg: BM25 in plain SQL.** No extension beyond pgvector, so it runs unchanged on Cloud SQL and AlloyDB.
+  - Lucene's formula and defaults: k1 1.2, b 0.75, idf = ln(1 + (N − df + 0.5) / (df + 0.5)). The classic idf turns negative for words in over half the chunks ("item", "statement").
+  - It searches the same text the embedding model sees (`Chunk.embed_text`: company, filing, fiscal year, section and page, then the content).
+  - Postgres's English text search (stemming, stop words); a chunk matches on any of the question's words. Postgres's own `plainto_tsquery` / `websearch_to_tsquery` need every word and match no chunk for a typical question.
+  - N, document frequency and average length cover the whole corpus, also with filters, so a filtered ranking is the unfiltered one restricted to the filter. A test checks the SQL against a plain-Python BM25.
+  - Stored as materialised views (`keyword_docs`, `keyword_postings`), rebuilt by `finrag index` in about 6 s. The `chunks` table and its HNSW index are not rewritten, so the vector baseline stays as measured.
+- **Fusion: Reciprocal Rank Fusion**, k = 60 (Cormack et al., 2009), the top 50 of each leg, equal weights, top 20 kept.
+  - Ties: equal scores within a leg share a rank; equal fused scores go to the better vector rank, then the better keyword rank, then a hash of the chunk id. Chunk ids start with ticker and year, so sorting by id would favour some companies and older filings.
+- **What this predicts.** With k 60 and 50 per leg, any chunk in both lists outranks any chunk in only one. Where the legs disagree, hybrid can push the vector leg's first hit down, so hit@1 and MRR can fall while hit@20 rises.
+- **Handicaps left in on purpose.**
+  - The query is the FinanceBench question verbatim. Its instruction words are rare in 10-Ks, so BM25 weighs them heavily: "usd" is in 7 chunks, "question" in 16. A stop-word list drawn from these 57 questions would be tuning on the test set.
+  - Questions say "FY2018"; filings say "2018". There's no rewriting.
+- **How it's scored.**
+  - One run scores the vector leg, the keyword leg and hybrid from the same searches. The vector leg's top 20 is checked against the committed vector results.
+  - **Main result:** no-filter page hit@5, hybrid vs vector. Reported as questions fixed and broken, with an exact McNemar test and 95% Wilson intervals. Everything else is exploratory.
+  - **Power:** vector misses 8 questions at hit@5. Reaching p < 0.05 needs a net gain of at least 6: 6, 7 or 8 fixed with none broken, or all 8 fixed with one broken. A smaller gain can't be told apart from chance. (Corrected after review: the first version said every case needed none broken.)
+  - **Label misses:** changes on the 10 known label misses ([above](#where-vector-only-retrieval-misses): FinanceBench ids 00517, 00585, 00684, 00995, 01077, 01226, 01279, 01351, 02608, 10285) are reported separately.
+- **Sensitivity check** (`--grid`): RRF k in {10, 30, 60, 100} × depth in {20, 50, 100}, plus the opposite tie-break. It is run after the main result, every cell is reported, and none replaces the settings above.
+- **Already seen:** during design, the keyword top 10 for one question (3M FY2018 capex) was compared with its evidence page.
+
+#### Results: hybrid is worse than vector alone
+
+Real runs on 27 Oct 2026: the same 57 questions and gold labels, top 20.
+- **Same baseline.** One run scores all three methods. The vector leg's top 20 is identical to the committed vector run in 171 of 171 searches, on the same HNSW build.
+- **HNSW vs exact.** With exact vector search the metrics are the same to two decimals. The fused top 20 is the same chunks in the same order in 170 of 171 searches; the other is 00757, no filter.
+
+| Setting | Method | hit@1 | hit@3 | hit@5 | hit@10 | hit@20 | MRR | All passages @5 / @20 |
+|---|---|---|---|---|---|---|---|---|
+| No filter | Vector | 53% (30) | 77% (44) | **86% (49)** | 95% (54) | 96% (55) | 0.67 | 4 / 9 of 13 |
+| | Keyword (BM25) | 5% (3) | 9% (5) | 9% (5) | 14% (8) | 23% (13) | 0.08 | 0 / 0 |
+| | Hybrid (RRF) | 23% (13) | 42% (24) | **53% (30)** | 82% (47) | 95% (54) | 0.38 | 2 / 7 |
+| Company + year | Vector | 54% (31) | 82% (47) | 95% (54) | 96% (55) | 98% (56) | 0.70 | 4 / 9 |
+| | Keyword (BM25) | 16% (9) | 23% (13) | 30% (17) | 42% (24) | 53% (30) | 0.22 | 0 / 1 |
+| | Hybrid (RRF) | 30% (17) | 46% (26) | 53% (30) | 72% (41) | 95% (54) | 0.43 | 1 / 6 |
+
+With the company filter, hit@5 is 86% for vector, 14% for keyword and 47% for hybrid.
+
+- **Main result: hybrid loses 19 questions at hit@5.**
+  - It fixes 2 and breaks 21 (exact McNemar p < 0.001). Hybrid is 53% (95% CI 40–65%) against vector's 86% (75–93%).
+  - 4 of the 21 broken questions are known label misses (00517, 00995, 01351, 10285); no label miss is fixed. Without them it is 2 fixed and 17 broken (p = 0.0007).
+  - The 2 fixed questions (Boeing 00464, Verizon 00215) had the evidence at vector rank 6; both legs found it.
+- **Why the keyword leg is weak.**
+  - With no filter, it has the evidence page nowhere in its top 50 for 35 of 57 questions; even inside the right filing, for 17. The vector leg: 1 and 0.
+  - **Tables:** 52 of the 83 gold chunks are tables (40 of 57 questions have one). Only 28 of the keyword leg's 285 top-5 chunks are tables, against 171 for vector. Questions use analysts' words and statements use line items: "capital expenditure" against "Purchases of property, plant and equipment".
+  - **Rare words in the question's wording** get the highest weights: "usd" is in 7 chunks, "question" in 16, "explain" in 8. "FY2018" is in none.
+  - **No sense of company or year** beyond the words: with no filter, 135 of its 285 top-5 chunks are from the right company and 55 from the right filing. Vector: 285 and 220.
+- **Why fusion makes it worse.**
+  - RRF puts chunks found by both legs first. With no filter they take 217 of the 285 hybrid top-5 slots, and the vector leg's first hit drops out of the top 5 for 25 of 57 questions.
+  - The design predicted that hit@1 and MRR would fall. It also predicted a rise in hit@20, which did not happen: hit@20 fell in every setting (no filter 55 → 54, company 55 → 51, company + year 56 → 54) and no question was fixed at hit@20.
+  - For 19 of the 21 broken questions, the keyword leg never had the evidence page in its top 50, and the vector's hit (rank 1–5) fell to ranks 6–18.
+    - In 15 of them, chunks the two legs shared pushed it down.
+    - In the other 4 (00720, 00517, 05915, 00790), the legs share 0–2 chunks. With equal weights RRF then interleaves the two lists (vector 1, keyword 1, vector 2, …), so vector rank r falls to about 2r − 1, below the keyword leg's own off-target chunks.
+- **The keyword leg adds no recall.** The evidence page is in either leg's top 50 for 56 of 57 questions with no filter, the same as the vector leg alone. With the company filter it's 57 against 56. A reranker over both lists would gain almost nothing from it.
+- **By question type** (no filter, hit@5; vector / keyword / hybrid):
+  - domain-relevant: 26 / 3 / 17 of 32;
+  - metrics-generated: 15 / 0 / 9 of 15;
+  - novel-generated: 8 / 2 / 4 of 10.
+- **Sensitivity check** ([`results/retrieval_hybrid_grid.json`](results/retrieval_hybrid_grid.json), with the questions fixed and broken against vector for every cell): no setting beats vector alone, and the main run's cell is reproduced (53%). Hit@5 with no filter, against vector's 86% (49/57):
+  - **20 per leg, any RRF k (10, 30, 60 or 100):** 79% (45/57), with 2 fixed and 6 broken (p = 0.29). That can't be told apart from vector, and 4 of the 6 broken are label misses (00517, 00995, 01226, 01351). It was found on the test set, so it is not adopted. With the right filing, the same cells lose clearly: 72–79% against 95%, with 0 fixed and 9–13 broken (p ≤ 0.004).
+  - **50 or 100 per leg:** 44–77%. A smaller k helps at these depths, by letting each leg's own first hits beat weakly shared chunks.
+  - **Keyword-first tie-breaks** (k 60, 50 per leg): 51%.
+  - **Why fewer per leg helps:** far fewer chunks are shared. Over the 57 no-filter questions, the legs' top 20s share 108 chunks and their top 50s share 368.
+- **Latency** ([`results/latency_hybrid.json`](results/latency_hybrid.json), `eval-retrieval --method hybrid --timing 3`). Median / p95 over 3 timed passes of all 171 searches after a warm-up, each leg at depth 50, legs one after the other, load average 2–5 on this 8 GB Mac:
+  - no filter: vector 3 / 5 ms, keyword 119 / 324 ms, hybrid 124 / 328 ms;
+  - company + year: vector 4 / 6 ms, keyword 42 / 120 ms, hybrid 47 / 125 ms.
+
+  BM25 over the postings view is most of the cost. The single scored run (in the results files) was slower, under heavier load. The cost per question is unchanged: one query embedding, and BM25 runs in Postgres.
+- **Decision:** vector search stays the default (`ask` uses it). Hybrid and keyword search stay available for comparison.
+- **Next:**
+  - Rerank the vector top 20–50.
+  - Query decomposition for multi-statement questions.
+  - Pull company and year out of the question.
+  - Keyword search would need the question rewritten into filing vocabulary first (a job for the agents, days 9–12).
+  - Any fusion tuning, such as 20 per leg, needs a development set outside the 57, e.g. questions on the 9 corpus filings no evaluation question uses.
+- **Results:**
+  - [`results/retrieval_hybrid.json`](results/retrieval_hybrid.json)
+  - [`results/retrieval_hybrid_exact.json`](results/retrieval_hybrid_exact.json)
 
 ## Priorities
 

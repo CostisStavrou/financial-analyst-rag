@@ -1,0 +1,79 @@
+{"meta": {
+ "method": "search latency: vector leg, keyword leg, hybrid (legs one after the other, plus fusion), each leg at hybrid depth",
+ "passes": "1 warm-up, then 3 timed passes over every question",
+ "depth_per_leg": 50,
+ "k": 20,
+ "vector_leg": "HNSW where the planner uses it",
+ "questions": 57,
+ "code": "90c3017 + uncommitted changes",
+ "load_average_1_5_15min": {
+  "before": [
+   4.7,
+   3.3,
+   6.5
+  ],
+  "after": [
+   2.1,
+   2.8,
+   5.9
+  ]
+ },
+ "machine": "Postgres in Docker on the developer's Mac",
+ "run_at": "2026-10-27T22:30:59"
+},
+"summary": {
+ "unfiltered": {
+  "vector": {
+   "ms_median": 3.3,
+   "ms_p95": 5.0,
+   "samples": 171
+  },
+  "keyword": {
+   "ms_median": 119.0,
+   "ms_p95": 324.4,
+   "samples": 171
+  },
+  "hybrid": {
+   "ms_median": 123.8,
+   "ms_p95": 328.1,
+   "samples": 171
+  }
+ },
+ "company": {
+  "vector": {
+   "ms_median": 8.3,
+   "ms_p95": 12.8,
+   "samples": 171
+  },
+  "keyword": {
+   "ms_median": 73.4,
+   "ms_p95": 179.2,
+   "samples": 171
+  },
+  "hybrid": {
+   "ms_median": 83.0,
+   "ms_p95": 187.5,
+   "samples": 171
+  }
+ },
+ "company_year": {
+  "vector": {
+   "ms_median": 4.2,
+   "ms_p95": 5.8,
+   "samples": 171
+  },
+  "keyword": {
+   "ms_median": 41.9,
+   "ms_p95": 120.1,
+   "samples": 171
+  },
+  "hybrid": {
+   "ms_median": 47.4,
+   "ms_p95": 125.3,
+   "samples": 171
+  }
+ }
+},
+"questions": [
+
+]}

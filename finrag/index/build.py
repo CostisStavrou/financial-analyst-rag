@@ -19,7 +19,8 @@ def build_index(
     batch: int = 200, first: list[tuple[str, int]] | None = None, reindex: bool = False,
 ) -> dict:
     """`first`: (ticker, fiscal year) filings to embed before the rest, in that order.
-    The HNSW index is rebuilt after new vectors are written, or always with `reindex`."""
+    The keyword index is rebuilt every run. The HNSW index is rebuilt after new vectors are
+    written, or always with `reindex`."""
     conn = db.connect(settings.database_url)
     db.init_schema(conn, settings.embed_dim, settings.embed_model)
 
@@ -36,6 +37,11 @@ def build_index(
         by_acc.setdefault(c.accession, []).append(c.id)
     for acc, ids in by_acc.items():
         stale += db.delete_stale_chunks(conn, acc, ids)
+    # before embedding, which can stop on a quota error; the keyword index needs no vectors
+    t0 = time.perf_counter()
+    db.refresh_keyword_index(conn)
+    keyword_refresh = time.perf_counter() - t0
+    log.info("keyword index rebuilt in %.1fs", keyword_refresh)
 
     todo_ids = {
         r[0]
@@ -89,6 +95,7 @@ def build_index(
         "est_tokens_sent": embedder.impl.tokens_sent if embedder else 0,
         "embed_seconds": round(elapsed, 1),
         "index_rebuild_seconds": round(rebuild, 1),
+        "keyword_refresh_seconds": round(keyword_refresh, 1),
         "chunks_in_db": total,
         "chunks_with_embedding": embedded,
     }
