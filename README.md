@@ -25,6 +25,8 @@ Then the pipeline, one command per step (run from the repo root):
 .venv/bin/python -m finrag ask "What is Amcor's year end FY2020 net AR?" --ticker AMCR --year 2020
 .venv/bin/python -m finrag eval-retrieval   # FinanceBench: is the evidence in the top 20?
 .venv/bin/python -m finrag eval-retrieval --method hybrid   # same, for BM25 + vector (RRF)
+.venv/bin/python -m finrag answer "How many people did PepsiCo employ at the end of 2022?"   # Gemini answer with sources
+.venv/bin/python -m finrag eval-answers --estimate   # token count and cost of the answer-accuracy run, no paid calls
 ```
 
 Example (real run, 27 Oct; FinanceBench question 03882, answer $1,616m, evidence page 50):
@@ -51,7 +53,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 | Days | Status |
 |---|---|
 | 1–4 (27–30 Oct) | **Done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, all 12,103 chunks embedded with `gemini-embedding-001` in local pgvector, `ask` with citations working end to end. |
-| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)); hybrid search (BM25 in Postgres + vector, RRF) built and measured: worse than vector alone ([results](#results-hybrid-is-worse-than-vector-alone)). Next: reranking, table extraction. |
+| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)); hybrid search (BM25 in Postgres + vector, RRF) built and measured: worse than vector alone ([results](#results-hybrid-is-worse-than-vector-alone)). **31 Oct:** answer accuracy with Gemini, 95% with no filter ([results](#results-95-correct-with-no-filter)). Next: reranking, table extraction. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
 
@@ -88,11 +90,12 @@ finrag/ingest/          EDGAR download, HTML parsing, chunking
 finrag/index/           embeddings (Gemini / local), Postgres schema and loading
 finrag/retrieve/        vector search with metadata filters, BM25 keyword search, hybrid (RRF)
 finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
-finrag/eval/            FinanceBench loading, coverage, page check, retrieval scoring
+finrag/answer/          Gemini answers with citations (cached, with token and cost accounting)
+finrag/eval/            FinanceBench loading, coverage, page check, retrieval and answer scoring
 finrag/cli.py           python -m finrag <command>
 results/                evaluation results: per-question ranks and chunk ids, no FinanceBench text
 scripts/embed_daily.sh  daily free-tier Gemini embedding run
-tests/                  parser, chunker, embedder, retrieval-metric and fusion tests; BM25 tests run against the local database when it is up
+tests/                  parser, chunker, embedder, retrieval-metric, fusion and answer tests (no API calls); BM25 tests run against the local database when it is up
 docker-compose.yml      local Postgres + pgvector
 ```
 
@@ -142,7 +145,7 @@ Run FinanceBench on each version and report retrieval, answer accuracy, cost per
 
 | Version | Evidence in top 5 (no filter) | Answer accuracy | Cost / question | Latency (median) |
 |---|---|---|---|---|
-| Vector only | **86%** (49/57) | – | $0.000006 (query embedding only) | 279 ms embed + 3 ms search |
+| Vector only | **86%** (49/57) | **95%** (54/57; 91% by both graders), top 10 chunks, `gemini-3.8-flash` ([results](#results-95-correct-with-no-filter)) | $0.0077 (answer; retrieval $0.000006) | 279 ms embed + 3 ms search + 7.5 s answer |
 | Hybrid (BM25 + vector, RRF) | 53% (30/57) ([why lower](#results-hybrid-is-worse-than-vector-alone)) | – | $0.000006 (query embedding only) | 279 ms embed + 124 ms search |
 | Vector + rerank | – | – | – | – |
 | Vector + rerank + tables | – | – | – | – |
@@ -331,6 +334,67 @@ With the company filter, hit@5 is 86% for vector, 14% for keyword and 47% for hy
 - **Results:**
   - [`results/retrieval_hybrid.json`](results/retrieval_hybrid.json)
   - [`results/retrieval_hybrid_exact.json`](results/retrieval_hybrid_exact.json)
+
+### Answer accuracy
+
+`python -m finrag eval-answers` (`--estimate` counts the tokens and prices a run without any paid call). `python -m finrag answer "..."` answers one question, with its sources. Code: [`finrag/answer/`](finrag/answer), [`finrag/eval/answers.py`](finrag/eval/answers.py).
+
+#### Decided before the first run
+
+As for hybrid search, all of this was fixed before any answer to the 57 questions was generated, and it isn't changed after seeing results. A later change would be a new, labelled row.
+
+- **Questions:** the same 57, asked verbatim.
+- **Three settings**, mirroring the FinanceBench paper's shared store, single store and oracle:
+  - **No filter:** the top 10 chunks from vector search over all 30 filings, the system as built. This is the main result.
+  - **Company + year:** the top 10 within the right filing.
+  - **Evidence pages:** every chunk on FinanceBench's evidence pages. This takes retrieval out and leaves reading and arithmetic.
+- **Answers:** `gemini-3.8-flash`, with the model's default thinking, seed 0 and JSON output (the answer, the numbers of the sources it used, and whether the sources hold an answer).
+  - The prompt ([`finrag/answer/generate.py`](finrag/answer/generate.py)) gives numbered sources with their citations, then the question.
+  - It asks for the answer first, then the working, and forbids outside figures: if something is missing, the model must say what.
+- **Grading:** `gemini-4-argon`, a larger model than the one answering, compares each answer with FinanceBench's reference answer and justification.
+  - Labels: correct, incorrect or refusal.
+  - Rules ([`finrag/eval/answers.py`](finrag/eval/answers.py)): figures must agree at the precision asked; rounding within about 1% and equivalent units are fine; extra detail is fine unless it contradicts the reference.
+- **A check on the grader:** a second grader from another model family, a Claude subagent that doesn't see the Gemini grades, labels every answer too. Agreement and Cohen's kappa are reported, with the disagreements.
+- **Reported:**
+  - **Main result:** no-filter accuracy, as correct out of 57 with a 95% Wilson interval.
+  - **Exploratory:** the other two settings and question-by-question comparisons between settings (exact McNemar), by question type, and by whether the evidence was in the context.
+  - **Cost and latency:** from the API's own token counts, at the prices of 30 Oct 2026. Replies are cached, so a re-run costs nothing.
+- **One run.** Gemini isn't fully deterministic even with a seed. There are no re-runs to pick the best.
+
+#### Results: 95% correct with no filter
+
+One real run on 31 Oct 2026: 171 answers (57 questions × 3 settings) and 171 grades. It cost **$1.55**, after a $0.005 smoke test on a question of my own.
+
+| Setting | Correct (Gemini grader) | 95% CI | Correct, second grader | Correct by both graders | Incorrect | Refusals |
+|---|---|---|---|---|---|---|
+| No filter (top 10) | **54 / 57 (95%)** | 86–98% | 54 / 57 | 52 / 57 (91%) | 3 | 0 |
+| Company + year (top 10) | 54 / 57 (95%) | 86–98% | 54 / 57 | 52 / 57 | 3 | 0 |
+| Evidence pages | 56 / 57 (98%) | 91–100% | 55 / 57 | 55 / 57 | 1 | 0 |
+
+- **The graders agree on 162 of 171 grades.** Cohen's kappa is only 0.37: with almost every answer correct, chance agreement is already high, so kappa is low even though raw agreement is 95%. The 9 disagreements fall on 5 questions, all judgement calls:
+  - **PepsiCo restructuring (01328).** The question says to answer 0 if the income statement shows no line for it. The model said 0, then gave the $411 million. Gemini: correct; second grader: incorrect.
+  - **Verizon capital intensity (00215).** "Yes", as in the reference, but without the reference's assets-to-revenue ratio. Gemini: incorrect; second grader: correct.
+  - **Verizon quick ratio (00216).** The model computes the reference's 0.54, then argues the ratio doesn't suit a telecom company. Gemini: correct; second grader: incorrect.
+  - **Boeing tax rate (00585).** The filing's own figures, (0.6)% and 14.7%, with the opposite sign convention to the reference.
+  - **Best Buy gross margins (00685).** The right conclusion from FY2013–2019 data, because the FY2022–23 pages weren't retrieved.
+  - The strictest count, correct by both graders, is in the table: 52 of 57 with no filter.
+- **Retrieval is rarely the limit.** With no filter, the 10 chunks held an evidence page for 54 questions, and 52 of those were answered correctly. Of the 3 questions whose evidence page wasn't retrieved, 2 were still answered correctly (both Boeing) from other pages. One of them, the tax rate (00585), is a known label miss. The settings don't differ beyond chance: 1 question each way between no filter and company + year, and 0 against 2 between no filter and evidence pages (p = 0.5).
+- **What's wrong** with the 3 incorrect no-filter answers (Gemini grader):
+  - **CVS "capital intensive?" (00790):** "no" in all three settings, where the reference says "yes" on the strength of a low return on assets. The model reasoned from fixed assets.
+  - **Best Buy (00685)** and **Verizon (00215):** as above.
+- **By question type** (no filter): metrics-generated 15 / 15, novel-generated 10 / 10, domain-relevant 29 / 32.
+- **Citations:** 51 of the 54 correct no-filter answers cite a chunk on an evidence page. The model never declared a question unanswerable.
+- **Cost per question** (no filter):
+  - **Answering:** $0.0077, from 4,789 input and 1,107 output tokens on average (783 of them thinking).
+  - **Grading:** $0.0025 per answer, which is evaluation only.
+- **Latency** (no filter, 4 calls at a time): answering takes 7.5 s median and 20.4 s p95. That dwarfs retrieval (about 0.3 s).
+- **Caveats.**
+  - 57 questions is a small test, as the interval of 86–98% shows.
+  - FinanceBench has been public since 2023, so the models may have seen some of its questions. Nothing here rules that out.
+  - The answers include their working (median 112 words). The graders score the conclusion and the figures, not the length.
+- **Results:**
+  - [`results/answers.json`](results/answers.json) (labels, citations, chunk ids, tokens, cost; no FinanceBench text and no answers);
+  - [`results/answers_second_grader.json`](results/answers_second_grader.json) (both graders' labels).
 
 ## Priorities
 

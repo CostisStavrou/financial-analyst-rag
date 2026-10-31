@@ -505,13 +505,14 @@ def _public(row: dict) -> dict:
 
 
 def save(name: str, meta: dict, summary: dict, rows: list[dict], data_dir: Path,
-         results_dir: Path) -> tuple[Path, Path]:
+         results_dir: Path, public_row=None) -> tuple[Path, Path]:
     """Full detail to data/eval/ (git-ignored). A copy without question text goes to
     results/, since FinanceBench is CC BY-NC 4.0 and is not redistributed here.
     One line per question, so runs diff cleanly."""
     detail = data_dir / "eval" / f"{name}.json"
     public = results_dir / f"{name}.json"
-    for path, out_rows in ((detail, rows), (public, [_public(r) for r in rows])):
+    public_row = public_row or _public
+    for path, out_rows in ((detail, rows), (public, [public_row(r) for r in rows])):
         path.parent.mkdir(parents=True, exist_ok=True)
         lines = ",\n".join(json.dumps(r) for r in out_rows)
         path.write_text(f'{{"meta": {json.dumps(meta, indent=1)},\n'

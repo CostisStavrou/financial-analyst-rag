@@ -105,6 +105,82 @@ def cmd_ask(args) -> None:
         print(f"    {h.source_url}\n")
 
 
+def cmd_answer(args) -> None:
+    from finrag.answer import generate
+    from finrag.answer.llm import cost
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+    from finrag.retrieve import vector
+
+    s = get_settings()
+    conn = db.connect(s.database_url)
+    hits = vector.search(conn, make_embedder(s).embed_query(args.question), s.embed_model,
+                         k=args.k, ticker=args.ticker and args.ticker.upper(),
+                         fiscal_year=args.year)
+    llm = generate.answerer(s)
+    a, reply = generate.answer(llm, args.question, hits)
+    print(f"Q: {args.question}\n")
+    print(textwrap.fill(a["answer"], 100) if "\n" not in a["answer"] else a["answer"])
+    if not a["answerable"]:
+        print("\n(the model found no answer in the sources)")
+    print("\nSources:")
+    for n in a["citations"]:
+        print(f"  [{n}] {hits[n - 1].citation()}\n      {hits[n - 1].source_url}")
+    usd = cost(llm.model, reply.input_tokens, reply.output_tokens)
+    print(f"\n{llm.model}: {reply.input_tokens} input + {reply.output_tokens} output tokens "
+          f"({reply.thinking_tokens} thinking), ${usd:.4f}, {reply.ms / 1000:.1f} s"
+          + (" (cached)" if reply.cached else ""))
+
+
+def cmd_eval_answers(args) -> None:
+    from datetime import datetime
+
+    from finrag.answer import generate
+    from finrag.answer.llm import PRICES, Budget
+    from finrag.config import ROOT
+    from finrag.eval import answers, financebench, retrieval
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+    from finrag.ingest.build import load_chunks
+
+    s = get_settings()
+    rows = financebench.load(financebench.download(s.data_dir))
+    refs = {r["financebench_id"]: r for r in rows}
+    chunks = load_chunks(s.parsed_dir)
+    questions = [q for q in retrieval.load_questions(rows, load_companies(), chunks)
+                 if q.passages]
+    conn = db.connect(s.database_url)
+    retrieval.check_index(conn, chunks, s.embed_model)
+    ctx = answers.contexts(questions, make_embedder(s), conn, s.embed_model)
+    budget = Budget(args.max_usd)
+    gen, judge = generate.answerer(s, budget=budget), answers.grader(s, budget=budget)
+    if args.estimate:
+        print(json.dumps(answers.estimate(questions, refs, ctx, gen, judge), indent=2))
+        return
+    results = answers.run(questions, refs, ctx, gen, judge, workers=args.workers)
+    summary = answers.report(results)
+    meta = {
+        "questions": len(questions),
+        "retrieval": f"vector search, top {answers.K} chunks (gold_pages: every chunk on the "
+                     "evidence pages)",
+        "generator": gen.settings(),
+        "judge": judge.settings(),
+        "prices_usd_per_1m": {m: PRICES[m] for m in (gen.model, judge.model)},
+        "api_calls_this_run": {"generator": gen.calls, "judge": judge.calls},
+        "usd_spent_this_run": round(budget.spent, 4),
+        "code": _git_version(),
+        "run_at": datetime.now().isoformat(timespec="seconds"),
+        "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (question, reference and answer "
+                   "text left out here)",
+    }
+    detail, public = retrieval.save("answers", meta, summary, results, s.data_dir,
+                                    ROOT / "results", public_row=answers._public)
+    print(answers.format_report(summary))
+    print(f"\nAPI calls: {gen.calls} generator, {judge.calls} judge (the rest from the cache), "
+          f"${budget.spent:.4f} spent")
+    print(f"per-question detail: {detail}\nsummary without FinanceBench text: {public}")
+
+
 def cmd_stats(args) -> None:
     from finrag.index import db
 
@@ -308,6 +384,21 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--full", action="store_true", help="print whole chunks")
     a.add_argument("--method", choices=("vector", "keyword", "hybrid"), default="vector")
     a.set_defaults(func=cmd_ask)
+
+    an = sub.add_parser("answer", help="answer a question with Gemini from the top-k chunks")
+    an.add_argument("question")
+    an.add_argument("-k", type=int, default=10)
+    an.add_argument("--ticker")
+    an.add_argument("--year", type=int, help="fiscal year")
+    an.set_defaults(func=cmd_answer)
+
+    ea = sub.add_parser("eval-answers",
+                        help="FinanceBench answer accuracy, graded by a second Gemini model")
+    ea.add_argument("--estimate", action="store_true",
+                    help="count input tokens and estimate the cost; no paid calls")
+    ea.add_argument("--workers", type=int, default=4, help="API calls at a time")
+    ea.add_argument("--max-usd", type=float, help="stop once fresh calls have cost this much")
+    ea.set_defaults(func=cmd_eval_answers)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")
     st.set_defaults(func=cmd_stats)
