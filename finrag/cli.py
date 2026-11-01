@@ -181,6 +181,82 @@ def cmd_eval_answers(args) -> None:
     print(f"per-question detail: {detail}\nsummary without FinanceBench text: {public}")
 
 
+def cmd_agent(args) -> None:
+    import asyncio
+
+    from finrag.agents.pipeline import Pipeline
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+
+    s = get_settings()
+    p = Pipeline(db.connect(s.database_url), make_embedder(s), s.embed_model, load_companies(),
+                 s.gemini_api_key)
+    r = asyncio.run(p.run(args.question))
+    final = r["verdict"] or {}
+    print(f"Q: {args.question}\n\nplan: {json.dumps(r['plan'])}\n")
+    print(final.get("answer", "(no answer)"))
+    if final.get("problems"):
+        print("\nverifier corrected the draft: " + "; ".join(final["problems"]))
+    print("\nSources:")
+    for n in final.get("citations", []):
+        if 1 <= n <= len(r["sources"]):
+            print(f"  [{n}] {r['sources'][n - 1].citation()}")
+    print()
+    for step, m in r["steps"].items():
+        extra = (f"{m['sources']} sources" if step == "retriever" else
+                 f"{m['input_tokens']} in / {m['output_tokens']} out tokens, "
+                 f"{m['tool_calls']} tool calls, ${m['usd']:.4f}")
+        print(f"  {step:<10} {(m['ms'] or 0) / 1000:5.1f} s  {extra}")
+    print(f"  total      {r['ms'] / 1000:5.1f} s  ${r['usd']:.4f}")
+
+
+def cmd_eval_agents(args) -> None:
+    from datetime import datetime
+
+    from finrag.agents import pipeline
+    from finrag.config import ROOT
+    from finrag.eval import agents, answers, financebench, retrieval
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+    from finrag.ingest.build import load_chunks
+
+    s = get_settings()
+    rows = financebench.load(financebench.download(s.data_dir))
+    refs = {r["financebench_id"]: r for r in rows}
+    chunks = load_chunks(s.parsed_dir)
+    questions = [q for q in retrieval.load_questions(rows, load_companies(), chunks)
+                 if q.passages]
+    conn = db.connect(s.database_url)
+    retrieval.check_index(conn, chunks, s.embed_model)
+    p = pipeline.Pipeline(conn, make_embedder(s), s.embed_model, load_companies(),
+                          s.gemini_api_key)
+    runs = agents.run(questions, p, s.data_dir / "eval" / "agents_runs.jsonl", args.max_usd)
+    results = agents.grade(questions, refs, runs, answers.grader(s))
+    single = ROOT / "results" / "answers.json"
+    baseline = ({r["id"]: r["unfiltered"]["label"]
+                 for r in json.loads(single.read_text())["questions"]}
+                if single.exists() else None)
+    summary = agents.report(results, baseline)
+    meta = {
+        "questions": len(questions),
+        "pipeline": "ADK SequentialAgent: planner -> retriever (code) -> analyst (calculator "
+                    "tool) -> verifier (calculator tool)",
+        "models": {"planner": pipeline.PLANNER_MODEL, "analyst": pipeline.ANALYST_MODEL,
+                   "verifier": pipeline.VERIFIER_MODEL, "grader": answers.JUDGE_MODEL},
+        "retrieval": {"question_top_k": pipeline.K_QUESTION, "search_top_k": pipeline.K_SEARCH,
+                      "max_sources": pipeline.MAX_SOURCES},
+        "baseline": "results/answers.json, no-filter setting",
+        "code": _git_version(),
+        "run_at": datetime.now().isoformat(timespec="seconds"),
+        "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (question, reference and answer "
+                   "text left out here)",
+    }
+    detail, public = retrieval.save("agents", meta, summary, results, s.data_dir,
+                                    ROOT / "results", public_row=agents.public)
+    print(agents.format_report(summary))
+    print(f"\nper-question detail: {detail}\nsummary without FinanceBench text: {public}")
+
+
 def cmd_stats(args) -> None:
     from finrag.index import db
 
@@ -399,6 +475,14 @@ def main(argv: list[str] | None = None) -> None:
     ea.add_argument("--workers", type=int, default=4, help="API calls at a time")
     ea.add_argument("--max-usd", type=float, help="stop once fresh calls have cost this much")
     ea.set_defaults(func=cmd_eval_answers)
+
+    ag = sub.add_parser("agent", help="answer a question with the multi-agent pipeline (ADK)")
+    ag.add_argument("question")
+    ag.set_defaults(func=cmd_agent)
+
+    ev = sub.add_parser("eval-agents", help="FinanceBench answer accuracy of the agent pipeline")
+    ev.add_argument("--max-usd", type=float, help="stop once the agent runs have cost this much")
+    ev.set_defaults(func=cmd_eval_agents)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")
     st.set_defaults(func=cmd_stats)

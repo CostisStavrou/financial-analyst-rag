@@ -27,6 +27,7 @@ Then the pipeline, one command per step (run from the repo root):
 .venv/bin/python -m finrag eval-retrieval --method hybrid   # same, for BM25 + vector (RRF)
 .venv/bin/python -m finrag answer "How many people did PepsiCo employ at the end of 2022?"   # Gemini answer with sources
 .venv/bin/python -m finrag eval-answers --estimate   # token count and cost of the answer-accuracy run, no paid calls
+.venv/bin/python -m finrag agent "By what percentage did PepsiCo's net revenue grow from fiscal 2021 to fiscal 2022?"   # multi-agent answer, cost per step
 ```
 
 Example (real run, 27 Oct; FinanceBench question 03882, answer $1,616m, evidence page 50):
@@ -53,7 +54,7 @@ Q: What is Amcor's year end FY2020 net AR (in USD millions)? ...
 | Days | Status |
 |---|---|
 | 1–4 (27–30 Oct) | **Done 27 Oct**: setup, EDGAR downloader, parser/chunker with pages and sections, all 12,103 chunks embedded with `gemini-embedding-001` in local pgvector, `ask` with citations working end to end. |
-| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)); hybrid search (BM25 in Postgres + vector, RRF) built and measured: worse than vector alone ([results](#results-hybrid-is-worse-than-vector-alone)). **31 Oct:** answer accuracy with Gemini, 95% with no filter ([results](#results-95-correct-with-no-filter)). Next: reranking, table extraction. |
+| 5–8 | **Started 27 Oct**: vector-only retrieval baseline on FinanceBench ([results](#retrieval-no-llm-is-the-evidence-in-the-top-k)); hybrid search (BM25 in Postgres + vector, RRF) built and measured: worse than vector alone ([results](#results-hybrid-is-worse-than-vector-alone)). **31 Oct:** answer accuracy with Gemini, 95% with no filter ([results](#results-95-correct-with-no-filter)). **1 Nov:** multi-agent pipeline on Google ADK, 91% at 8× the cost ([results](#results-no-better-than-one-call-at-8-the-cost)). Next: a harder test set, XBRL cross-check. |
 
 ### Day 1–4 numbers (all from real runs on 27 Oct 2026)
 
@@ -89,7 +90,7 @@ config/companies.toml   corpus: companies, CIKs, fiscal years
 finrag/ingest/          EDGAR download, HTML parsing, chunking
 finrag/index/           embeddings (Gemini / local), Postgres schema and loading
 finrag/retrieve/        vector search with metadata filters, BM25 keyword search, hybrid (RRF)
-finrag/agents/          planner, retriever, calculator, verifier (days 9-12)
+finrag/agents/          ADK pipeline: planner, retriever, analyst with calculator tool, verifier
 finrag/answer/          Gemini answers with citations (cached, with token and cost accounting)
 finrag/eval/            FinanceBench loading, coverage, page check, retrieval and answer scoring
 finrag/cli.py           python -m finrag <command>
@@ -149,7 +150,8 @@ Run FinanceBench on each version and report retrieval, answer accuracy, cost per
 | Hybrid (BM25 + vector, RRF) | 53% (30/57) ([why lower](#results-hybrid-is-worse-than-vector-alone)) | – | $0.000006 (query embedding only) | 279 ms embed + 124 ms search |
 | Vector + rerank | – | – | – | – |
 | Vector + rerank + tables | – | – | – | – |
-| Agentic (+ XBRL check) | – | – | – | – |
+| Agents (ADK: planner, retriever, analyst + calculator, verifier) | – (evidence page in the sources for 50/57) | 91% (52/57) ([results](#results-no-better-than-one-call-at-8-the-cost)) | $0.064 | 32.7 s |
+| Agents + XBRL check | – | – | – | – |
 
 Plus error analysis: wrong page retrieved, table misread, maths error, refusal.
 
@@ -395,6 +397,64 @@ One real run on 31 Oct 2026: 171 answers (57 questions × 3 settings) and 171 gr
 - **Results:**
   - [`results/answers.json`](results/answers.json) (labels, citations, chunk ids, tokens, cost; no FinanceBench text and no answers);
   - [`results/answers_second_grader.json`](results/answers_second_grader.json) (both graders' labels).
+
+### Multi-agent answers (Google ADK)
+
+`python -m finrag agent "..."` answers one question and prints each step's tokens, cost and time. `python -m finrag eval-agents --max-usd 5` scores all 57. Code: [`finrag/agents/pipeline.py`](finrag/agents/pipeline.py), [`finrag/eval/agents.py`](finrag/eval/agents.py).
+
+#### Decided before the first run
+
+- **Pipeline:** one ADK `SequentialAgent`, with the steps passing results through session state.
+  1. **Planner** (`gemini-3.1-flash-lite`, the cheap model, because it reads only the question): the company (from the 10 in the corpus), the fiscal years named, and 1–4 searches, one per figure or statement needed.
+  2. **Retriever** (code, no model): the question's top 10 and each search's top 5 by vector search. They're filtered to the planned company and years (a year not in the corpus is dropped), merged without repeats, and capped at 20 chunks.
+  3. **Analyst** (`gemini-3.8-flash`): answers from the numbered sources, as in the single-call version, but does every calculation with a `calculate` tool. That tool is a safe arithmetic evaluator, not Python `eval`.
+  4. **Verifier** (`gemini-3.8-flash`): checks every figure against the sources, redoes every calculation with the tool, and checks that the conclusion answers the question. It returns the draft unchanged, or a corrected answer.
+- **Scored like the single-call answers:** the same 57 questions with no filter given (the planner must find the company and year), the same grader (`gemini-4-argon`) and rubric. The analyst's draft is graded as well, so the verifier's effect is measured.
+- **Reported:**
+  - **Main result:** correct out of 57, compared question by question with the single call's no-filter row (54/57, exact McNemar). That row is already near its ceiling, so a gain of 3 at most is possible, and it couldn't reach significance.
+  - **Also reported:** how often the planner gets the company and year right; whether an evidence page is in the sources; what the verifier changed, fixed and broke; and tokens, cost and time per step.
+- **One run**, saved question by question to `data/eval/agents_runs.jsonl`. There's no reply cache here, so a re-run would pay again; the runner skips finished questions instead.
+
+#### Results: no better than one call, at 8× the cost
+
+One real run on 1 Nov 2026, after a smoke test on a question of my own: PepsiCo revenue growth, 8.70%, right and verified, $0.037.
+- **Crash fix.** The run stopped at question 15 of 57: ADK once ended the analyst's turn with no structured draft, and the verifier's prompt then failed. Since then, the verifier is told when there's no draft and answers from the sources itself. This never happened again in the remaining 43 questions. All 57 ran with the same prompts and models.
+
+| | Single call, no filter | Agents |
+|---|---|---|
+| Correct | **54 / 57 (95%)** | 52 / 57 (91%, 95% CI 81–96%) |
+| Incorrect / refusals | 3 / 0 | 3 / 2 |
+| Cost per question | $0.0077 | **$0.064** (8.3×) |
+| Time per question, median / p95 | 7.5 / 20.4 s | **32.7 / 107.7 s** |
+
+- **No difference beyond chance.** The agents get 1 question the single call misses (Verizon capital intensity, 00215), and miss 3 it gets (exact McNemar p = 0.625).
+- **The planner works, and costs almost nothing.** `gemini-3.1-flash-lite` named the right company for 57 of 57 questions and included the right year for 55. The other two name no single filing year: Amcor's industry, and Boeing's forecast for FY2023, which sits in the FY2022 filing. It costs $0.0002 and 0.9 s per question.
+- **The losses come from the retriever's year order.**
+  - For "improving gross margin as of FY2023" (Amcor 00684) and "as of FY2022" (Boeing 00678), the planner asked for the named year plus earlier ones.
+  - The retriever searches one year at a time, oldest first, then keeps the first 20 chunks. That cut the most recent year, the one asked about, so the analyst correctly refused: "the sources only cover through FY2022".
+  - This is why an evidence page reached the sources for only 50 of 57 questions, against 54 for the single call's top 10.
+  - The fixed method set only the cap and the question-first order, not the year order. Putting the named year first is the obvious fix; it would be a new, labelled row.
+  - The third loss is PepsiCo 01328, the disputed "answer 0 or $411 million" question from the single-call run.
+- **The verifier changed 1 answer of 57**, fixing none and breaking none. It costs $0.031 per question (it re-reads all the sources), almost half the total, and adds 14 s.
+- **Where the cost and time go** (per question, median time):
+
+  | Step | Time | Cost | Model calls | Calculator calls | Input tokens |
+  |---|---|---|---|---|---|
+  | Planner | 0.9 s | $0.0002 | 1 | – | 471 |
+  | Retriever | 0.7 s | (search only) | – | – | 14.8 sources |
+  | Analyst | 18.8 s | $0.033 | 3.6 | 4.0 | 33,066 |
+  | Verifier | 14.2 s | $0.031 | 3.2 | 4.25 | 32,416 |
+
+  Each calculator call is another model turn that re-sends the whole prompt, so the analyst reads about 33,000 tokens to answer from about 15 chunks.
+- **What to keep:**
+  - The planner's company and year: cheap, accurate, and it lifts retrieval (hit@5 from 86% to 95% when the right filing is used).
+  - The calculator for questions that need arithmetic.
+  - Drop the verifier, or keep it only for answers with calculations.
+  - Put the named year first in retrieval.
+
+  On these 57 questions, which one call already answers at 95%, the agents can't show a gain. That needs the harder test set.
+- **Spend:** $3.65 for the agent runs, plus grading and one debug run of the failed question (about $0.40 together, estimated). So about $4.05 in all, under the $5 cap.
+- **Results:** [`results/agents.json`](results/agents.json) (plans checked, chunk ids, labels for the draft and final answer, tokens, cost and time per step; no FinanceBench text and no answers).
 
 ## Priorities
 

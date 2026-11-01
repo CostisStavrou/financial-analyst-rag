@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 PRICES = {
     "gemini-3.8-flash": (0.75, 3.75),  # until 31 Dec 2026; $1.50 / $7.50 from 1 Jan 2027
     "gemini-4-argon": (2.00, 10.00),  # until 30 Nov 2026; $4.00 / $20.00 from 1 Dec 2026
+    "gemini-3.1-flash-lite": (0.25, 1.50),
 }
 
 
