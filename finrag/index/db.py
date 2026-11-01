@@ -46,7 +46,7 @@ def init_schema(conn: psycopg.Connection, dim: int, model: str) -> None:
     if row and row[0] != want:
         raise RuntimeError(
             f"Index was built with {row[0]}, settings say {want}. "
-            "Run `finrag db-reset` to rebuild with the new model."
+            "Run `finrag db-init --reset` to rebuild with the new model."
         )
     conn.execute(
         "INSERT INTO index_meta (key, value) VALUES ('embedding', %s) ON CONFLICT DO NOTHING",

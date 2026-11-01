@@ -16,6 +16,7 @@ import json
 import statistics
 from pathlib import Path
 
+from finrag.agents.pipeline import MERGE
 from finrag.answer.llm import LLM
 from finrag.eval.answers import _p95, _share, judge_prompt
 from finrag.eval.retrieval import Question, mcnemar_exact, wilson
@@ -33,6 +34,9 @@ def run(questions: list[Question], pipeline, runs_path: Path, max_usd: float | N
     done = {}
     if runs_path.exists():
         done = {r["id"]: r for r in map(json.loads, runs_path.read_text().splitlines())}
+        if stale := sorted(i for i, r in done.items() if r.get("merge") != MERGE):
+            raise RuntimeError(f"{runs_path} holds {len(stale)} runs made with another retrieval "
+                               "merge; start a new run with --tag instead of mixing them.")
     runs_path.parent.mkdir(parents=True, exist_ok=True)
 
     async def all_questions():  # one event loop for the whole run
@@ -45,7 +49,8 @@ def run(questions: list[Question], pipeline, runs_path: Path, max_usd: float | N
                     raise RuntimeError(f"Spending cap of ${max_usd:.2f} reached (${spent:.4f} "
                                        "spent); finished questions are saved.")
                 r = await pipeline.run(q.question)
-                row = {"id": q.id, **{k: v for k, v in r.items() if k != "sources"},
+                row = {"id": q.id, "merge": MERGE,
+                       **{k: v for k, v in r.items() if k != "sources"},
                        "sources": [_hit_row(h) for h in r["sources"]]}
                 f.write(json.dumps(row) + "\n")
                 f.flush()

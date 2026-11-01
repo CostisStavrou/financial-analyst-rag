@@ -83,7 +83,7 @@ class GeminiEmbedder:
         if not api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY is not set. Add it to .env (see .env.example), "
-                "or set EMBED_PROVIDER=local to embed offline."
+                "or set EMBED_PROVIDER=local to embed offline (answering still needs the key)."
             )
         from google import genai
 

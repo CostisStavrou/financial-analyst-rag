@@ -38,6 +38,9 @@ from finrag.retrieve.vector import Hit, search
 PLANNER_MODEL = "gemini-3.1-flash-lite"
 ANALYST_MODEL = VERIFIER_MODEL = "gemini-3.8-flash"
 K_QUESTION, K_SEARCH, MAX_SOURCES = 10, 5, 20
+# How retrieve() merges its ranked lists, recorded with every evaluation run. The first run
+# (results/agents.json) took the lists in order, question first, before the cap.
+MERGE = "round-robin by rank"
 STEPS = ("planner", "retriever", "analyst", "verifier")
 
 
@@ -110,19 +113,26 @@ def sources_text(hits: list[Hit]) -> str:
 
 def retrieve(conn: psycopg.Connection, embedder: Embedder, model: str, question: str,
              plan: Plan, companies: list[Company]) -> list[Hit]:
-    """The question's top K_QUESTION and each search's top K_SEARCH, filtered to the planned
-    company and years (a ticker or year not in the corpus is dropped), merged without repeats:
-    question first, then the searches, at most MAX_SOURCES."""
+    """The question's top K_QUESTION and each search's top K_SEARCH, once per planned year,
+    filtered to the planned company and years (a ticker or year not in the corpus is dropped).
+    The ranked lists are merged round-robin by rank without repeats, at most MAX_SOURCES, so
+    every year and every search reaches the analyst however many there are. Under the cap each
+    list keeps about MAX_SOURCES / len(lists) hits: with two years and four searches, the
+    question keeps its top 2 per year."""
     by_ticker = {c.ticker: c for c in companies}
     ticker = plan.ticker if plan.ticker in by_ticker else None
     years = [y for y in plan.fiscal_years if ticker and y in by_ticker[ticker].fiscal_years]
     queries = [(question, K_QUESTION)] + [(s, K_SEARCH) for s in plan.searches[:4]]
-    found: dict[str, Hit] = {}
+    lists = []
     for text, k in queries:
         vec = embedder.embed_query(text)
-        for fy in years or [None]:
-            for h in search(conn, vec, model, k=k, ticker=ticker, fiscal_year=fy):
-                found.setdefault(h.id, h)
+        lists += [search(conn, vec, model, k=k, ticker=ticker, fiscal_year=fy)
+                  for fy in years or [None]]
+    found: dict[str, Hit] = {}
+    for rank in range(max(map(len, lists), default=0)):
+        for hits in lists:
+            if rank < len(hits):
+                found.setdefault(hits[rank].id, hits[rank])
     return list(found.values())[:MAX_SOURCES]
 
 

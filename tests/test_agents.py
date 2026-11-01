@@ -1,3 +1,5 @@
+import json
+
 from finrag.agents import pipeline
 from finrag.agents.pipeline import Plan, calculate, retrieve
 from finrag.config import Company
@@ -36,12 +38,48 @@ def test_retrieve_filters_to_the_plan_and_merges(monkeypatch):
     # 2019 isn't in the corpus, so only 2022; the question at top 10, each search at top 5
     assert calls == [("Q", 10, "ACME", 2022), ("a", 5, "ACME", 2022), ("b", 5, "ACME", 2022)]
     ids = [h.id for h in hits]
-    assert len(ids) == len(set(ids)) == pipeline.MAX_SOURCES and ids[:10] == [
-        f"Q-2022-{i}" for i in range(10)]
+    assert len(ids) == len(set(ids)) == pipeline.MAX_SOURCES
+    assert ids[:6] == ["Q-2022-0", "a-2022-0", "b-2022-0", "Q-2022-1", "a-2022-1", "b-2022-1"]
     calls.clear()
     retrieve(None, Emb(), "m", "Q", Plan(ticker="ZZZ", fiscal_years=[2022], searches=[]),
              COMPANIES)
     assert calls == [("Q", 10, None, None)]  # unknown company: no filter at all
+
+
+def test_retrieve_keeps_every_year_and_search_under_the_cap(monkeypatch):
+    # The old merge took the question's lists first: with 2 years they alone filled the cap
+    # of 20 and every planned search was dropped; with 3 the last year was cut.
+    def fake_search(conn, vec, model, k, ticker=None, fiscal_year=None):
+        return [hit(chunk(f"{vec}-{fiscal_year}-{i}", i, "", fy=fiscal_year)) for i in range(k)]
+
+    class Emb:
+        def embed_query(self, text):
+            return text
+
+    monkeypatch.setattr(pipeline, "search", fake_search)
+    companies = [Company("Acme", "ACME", 1, "Acme", (2020, 2021, 2022))]
+    for years in ([2021, 2022], [2020, 2021, 2022]):
+        plan = Plan(ticker="ACME", fiscal_years=years, searches=["a", "b", "c"])
+        hits = retrieve(None, Emb(), "m", "Q", plan, companies)
+        assert len(hits) == pipeline.MAX_SOURCES
+        assert {h.fiscal_year for h in hits} == set(years)
+        assert {h.id.split("-")[0] for h in hits} == {"Q", "a", "b", "c"}
+        for text in "Qabc":  # every (query, year) list gives at least its top hit
+            for fy in years:
+                assert f"{text}-{fy}-0" in {h.id for h in hits}
+
+
+def test_a_run_never_resumes_from_runs_made_with_another_merge(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text('{"id": "q1", "plan": null}\n')  # first run: no merge recorded
+    try:
+        agents.run([], None, runs)
+    except RuntimeError as e:
+        assert "--tag" in str(e)
+    else:
+        raise AssertionError("resumed from runs made with another merge")
+    runs.write_text(json.dumps({"id": "q1", "merge": pipeline.MERGE}) + "\n")
+    assert list(agents.run([], None, runs)) == ["q1"]
 
 
 def _row(qid, label, draft, changed=None, ticker_right=True):

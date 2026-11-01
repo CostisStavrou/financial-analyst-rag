@@ -230,7 +230,8 @@ def cmd_eval_agents(args) -> None:
     retrieval.check_index(conn, chunks, s.embed_model)
     p = pipeline.Pipeline(conn, make_embedder(s), s.embed_model, load_companies(),
                           s.gemini_api_key)
-    runs = agents.run(questions, p, s.data_dir / "eval" / "agents_runs.jsonl", args.max_usd)
+    name = f"agents_{args.tag}" if args.tag else "agents"
+    runs = agents.run(questions, p, s.data_dir / "eval" / f"{name}_runs.jsonl", args.max_usd)
     results = agents.grade(questions, refs, runs, answers.grader(s))
     single = ROOT / "results" / "answers.json"
     baseline = ({r["id"]: r["unfiltered"]["label"]
@@ -244,14 +245,14 @@ def cmd_eval_agents(args) -> None:
         "models": {"planner": pipeline.PLANNER_MODEL, "analyst": pipeline.ANALYST_MODEL,
                    "verifier": pipeline.VERIFIER_MODEL, "grader": answers.JUDGE_MODEL},
         "retrieval": {"question_top_k": pipeline.K_QUESTION, "search_top_k": pipeline.K_SEARCH,
-                      "max_sources": pipeline.MAX_SOURCES},
+                      "max_sources": pipeline.MAX_SOURCES, "merge": pipeline.MERGE},
         "baseline": "results/answers.json, no-filter setting",
         "code": _git_version(),
         "run_at": datetime.now().isoformat(timespec="seconds"),
         "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (question, reference and answer "
                    "text left out here)",
     }
-    detail, public = retrieval.save("agents", meta, summary, results, s.data_dir,
+    detail, public = retrieval.save(name, meta, summary, results, s.data_dir,
                                     ROOT / "results", public_row=agents.public)
     print(agents.format_report(summary))
     print(f"\nper-question detail: {detail}\nsummary without FinanceBench text: {public}")
@@ -471,7 +472,8 @@ def main(argv: list[str] | None = None) -> None:
     ea = sub.add_parser("eval-answers",
                         help="FinanceBench answer accuracy, graded by a second Gemini model")
     ea.add_argument("--estimate", action="store_true",
-                    help="count input tokens and estimate the cost; no paid calls")
+                    help="count input tokens and estimate the cost; no generation calls "
+                         "(uncached query embeddings are still made)")
     ea.add_argument("--workers", type=int, default=4, help="API calls at a time")
     ea.add_argument("--max-usd", type=float, help="stop once fresh calls have cost this much")
     ea.set_defaults(func=cmd_eval_answers)
@@ -482,6 +484,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ev = sub.add_parser("eval-agents", help="FinanceBench answer accuracy of the agent pipeline")
     ev.add_argument("--max-usd", type=float, help="stop once the agent runs have cost this much")
+    ev.add_argument("--tag", help="name a new run: results/agents_<tag>.json, its own runs file")
     ev.set_defaults(func=cmd_eval_agents)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")

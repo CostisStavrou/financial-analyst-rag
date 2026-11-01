@@ -20,6 +20,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# Personal working notes, never published
+HANDOVER.md
+
 # Editors / OS
 .DS_Store
 .idea/
