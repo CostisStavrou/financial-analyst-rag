@@ -89,14 +89,16 @@ EMBED_RPM=90 EMBED_TPM=28000 .venv/bin/python -m finrag index --tickers BBY
     https://www.sec.gov/Archives/edgar/data/1748790/000174879020000025/amcr-20200630.htm
 ```
 
+**Web demo:** `.venv/bin/python -m finrag serve` opens a page at http://127.0.0.1:8000. You ask a question and get the answer with the passages it relies on, each with its filing, page and a link to SEC.gov, plus what the question cost and how long it took. Fresh Gemini calls are capped at $1 a day by default (`--usd-per-day`), and saved replies are free. It is built for running locally; what it needs before going public is listed in [docs/BUILD.md](docs/BUILD.md#web-demo).
+
 The evaluations: `eval-retrieval` (add `--method hybrid` for hybrid search), `eval-answers` (`--estimate` prices a run first), `eval-agents --max-usd 5 --tag <name>`, and `eval-replay`, which replays the saved agent run's plans through today's retrieval with no API calls (it needs that run's local files and embedding cache, so it can't run from a fresh clone). They download FinanceBench on first use (`.venv/bin/python -m finrag financebench` fetches it and shows the coverage). Tests: `.venv/bin/python -m pytest` (no API key needed).
 
 ## Status
 
-Built and measured: ingestion, vector and hybrid search, single-call answers, the ADK pipeline, and the evaluation.
+Built and measured: ingestion, vector and hybrid search, single-call answers, the ADK pipeline, and the evaluation. Built, for running locally: a web demo of the single call.
 
 - **Agent retrieval fix, checked offline but not re-graded.** The agents' two refusals came from how sources were capped at 20: the question's own top 10 came first for every planned year, so with two years none of the planner's searches got in, and with three the third year was cut too (in both refusals, the year asked about). The merge now takes each list's hits rank by rank, so every year and search gets in (tested in [`tests/test_agents.py`](tests/test_agents.py)). Replaying the saved plans with no API calls ([`results/replay_retrieval.json`](results/replay_retrieval.json)), an evidence page now reaches the sources for 54 of 57 questions instead of 50, both refusals included (5 gained, 1 lost; p = 0.22). The 91% above is from the old version; answers with the fix haven't been generated or graded.
-- **Not built yet:** a Cloud Run deployment, a cross-check of figures against the SEC's structured XBRL data, reranking, and a harder test set beyond these 57 questions.
+- **Not built yet:** a public deployment of the demo on Cloud Run, a cross-check of figures against the SEC's structured XBRL data, reranking, and a harder test set beyond these 57 questions.
 
 ## How this was built
 
@@ -112,6 +114,7 @@ finrag/retrieve/        vector search with filters, BM25 keyword search, hybrid 
 finrag/answer/          Gemini answers with citations, reply cache, token and cost accounting
 finrag/agents/          ADK pipeline: planner, retriever, analyst with calculator, verifier
 finrag/eval/            FinanceBench loading, page check, retrieval, answer and agent scoring, offline replay
+finrag/web/             the web demo: FastAPI app and one HTML page
 finrag/cli.py           python -m finrag <command>
 results/                evaluation results: per-question ranks, labels, tokens, cost; no FinanceBench text
 docs/                   build details and the full evaluation write-up

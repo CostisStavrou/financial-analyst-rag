@@ -54,10 +54,27 @@ Chosen to overlap with FinanceBench: for each company, the 3 fiscal years with t
 - `index --limit 50` embeds only 50 chunks (cheap smoke test). Embeddings are cached in `data/cache/embeddings.sqlite`, so re-indexing never pays twice. After writing new vectors, `index` rebuilds the HNSW index (4 s for the full corpus); `index --reindex` forces a rebuild ([why](EVALUATION.md#hnsw-vs-exact-search)).
 - **Gemini quotas:** a paid key (Tier 1) embedded 11,403 chunks in 250 s; the rest were embedded earlier on the free tier. On the free tier each chunk counts as one request: on 27 Oct it allowed about 100 chunks a minute and about 1,000 a day (`EmbedContentRequestsPerDay...FreeTier`). For a free key, `scripts/embed_daily.sh` runs once a day after the reset, resumes where it stopped, does the FinanceBench filings first and paces itself (`EMBED_RPM` / `EMBED_TPM`).
 - No Gemini key? `EMBED_PROVIDER=local` with `pip install -e ".[local]"` uses BAAI/bge-base-en-v1.5 on CPU (768-dim, slow: ~1 chunk/s). Use a separate database for it, e.g. `DATABASE_URL=.../finrag_local`; the index refuses to mix models.
+- `serve` runs the [web demo](#web-demo) on http://127.0.0.1:8000 (`--port`, `--usd-per-day`).
 - Other commands: `stats` (chunks and embeddings per filing), `financebench` (questions covered), `page-check` (our pages vs FinanceBench evidence pages), `download --dry-run`, `db-init --reset`.
 - Tests: `.venv/bin/python -m pytest`.
 
 **macOS note:** if the repo sits in an iCloud-synced folder (e.g. `~/Documents`), macOS can mark files in `.venv` as hidden, and Python 3.13 then skips the editable-install `.pth` file, so the `finrag` console script fails with `No module named 'finrag'`. `python -m finrag` from the repo root always works.
+
+## Web demo
+
+`finrag serve` (FastAPI, [`finrag/web/`](../finrag/web)) runs the default system: vector search over all 30 filings, the top 10 chunks, one `gemini-3.8-flash` call, the same prompt as the evaluation. The page shows the answer, the passages it relies on (the ones it cites, with a tick, and the rest folded away), each with its filing, page and SEC.gov link, and the question's cost, time and tokens.
+
+- **Spending:** fresh Gemini calls are capped per day (UTC, `--usd-per-day`, default $1). A call is refused unless the worst case still fits: 8,000 tokens in and 4,096 out (the web path's output limit, thinking included), about $0.02. Saved replies are always served and cost nothing; the page labels them and shows their original cost and time. Query embeddings (about $0.000006 each) aren't counted.
+- **One question at a time.** A question that waits more than 45 s for the one before it gets "busy, try again" instead of queueing without limit.
+- **Answers render a safe subset of Markdown and LaTeX** (bold, lists, headings, simple formulas such as `\frac`), built as page elements, never parsed as HTML. Of the 384 replies in the local cache, 136 use lists, bold or headings and 19 use LaTeX.
+- **Built for running locally.** Before it goes public, on Cloud Run or anywhere else, it needs:
+  - per-visitor rate limits, so one visitor can't use up the day's cap;
+  - the day's spend kept in Postgres rather than in the process, which a restart or a second instance resets;
+  - security headers (a content security policy, `nosniff`, no framing) and a request size limit;
+  - a shorter Gemini retry budget on this path, so a slow API doesn't hold the queue for minutes;
+  - query embeddings kept in memory rather than added to the on-disk cache;
+  - a connection pool instead of one reconnecting connection;
+  - and outside the app: a Gemini API quota and a Cloud Billing budget alert.
 
 ## Design notes
 

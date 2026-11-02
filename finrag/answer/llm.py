@@ -92,7 +92,7 @@ class LLM:
 
     def __init__(self, api_key: str, model: str, cache_dir: Path, system: str,
                  schema: dict, thinking_level: str | None = None, seed: int = 0,
-                 budget: Budget | None = None):
+                 budget: Budget | None = None, max_output_tokens: int | None = None):
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not set. Add it to .env (see .env.example).")
         from google import genai
@@ -100,13 +100,17 @@ class LLM:
         self.client = genai.Client(api_key=api_key)
         self.model, self.system, self.schema = model, system, schema
         self.thinking_level, self.seed = thinking_level, seed
+        self.max_output_tokens = max_output_tokens
         self.cache = ReplyCache(cache_dir / "replies.sqlite")
         self.budget = budget or Budget()
         self.calls = 0
 
     def settings(self) -> dict:
-        return {"model": self.model, "system": self.system, "schema": self.schema,
-                "thinking_level": self.thinking_level, "seed": self.seed}
+        s = {"model": self.model, "system": self.system, "schema": self.schema,
+             "thinking_level": self.thinking_level, "seed": self.seed}
+        if self.max_output_tokens:  # left out when unset, so earlier cache keys still match
+            s["max_output_tokens"] = self.max_output_tokens
+        return s
 
     def _key(self, prompt: str) -> str:
         return hashlib.sha256(json.dumps([self.settings(), prompt], sort_keys=True).encode()
@@ -119,7 +123,8 @@ class LLM:
                     if self.thinking_level else None)
         return types.GenerateContentConfig(
             system_instruction=self.system, response_mime_type="application/json",
-            response_json_schema=self.schema, thinking_config=thinking, seed=self.seed)
+            response_json_schema=self.schema, thinking_config=thinking, seed=self.seed,
+            max_output_tokens=self.max_output_tokens)
 
     def count_tokens(self, prompt: str) -> int:
         """Input tokens of a prompt plus the system instruction (a free API call)."""

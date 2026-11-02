@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>finrag: ask a 10-K</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  /* A reviewed working paper: answers in a reading serif, figures in mono, sources on
+     green-bar ledger paper, and a red-pencil tick on every passage the answer relies on. */
+  :root {
+    color-scheme: light dark;
+    --paper: #fbfcf8;
+    --ink: #1b2a3a;
+    --graphite: #5e6a72;
+    --band: #e8f1e4;
+    --rule: #c9d6c3;
+    --pencil: #c2412d;
+    --field: #ffffff;
+    --sans: "Public Sans", system-ui, sans-serif;
+    --serif: "Source Serif 4", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #10161c;
+      --ink: #e6ecef;
+      --graphite: #93a1aa;
+      --band: #16211a;
+      --rule: #2c3a30;
+      --pencil: #e0705c;
+      --field: #0b1015;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.5 var(--sans);
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  a { color: inherit; text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--pencil); outline-offset: 2px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px;
+           border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
+  .mark { font: 500 15px var(--mono); letter-spacing: .04em; }
+  h1 { font: 700 28px/1.2 var(--sans); margin: 0; flex: 1 1 auto; }
+  .scope { color: var(--graphite); font-size: 14px; margin: 12px 0 0; }
+  .scope summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+                   margin-top: 4px; }
+  .scope ul { margin: 8px 0 0; padding-left: 18px; }
+
+  form { margin-top: 28px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  textarea {
+    width: 100%; min-height: 76px; resize: vertical; padding: 12px 14px;
+    font: 17px/1.45 var(--serif); color: var(--ink); background: var(--field);
+    border: 1px solid var(--graphite); border-radius: 4px;
+  }
+  textarea::placeholder { color: var(--graphite); opacity: 1; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
+  button.go {
+    font: 600 16px var(--sans); color: var(--paper); background: var(--ink);
+    border: 0; border-radius: 4px; padding: 10px 22px; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .status { color: var(--graphite); font-size: 14px; }
+  .examples { margin-top: 18px; font-size: 14px; color: var(--graphite); }
+  .examples button {
+    font: 14px var(--sans); color: var(--ink); background: none; cursor: pointer;
+    border: 1px solid var(--rule); border-radius: 999px; padding: 4px 12px; margin: 6px 6px 0 0;
+    text-align: left;
+  }
+  .examples button:hover:not(:disabled) { border-color: var(--ink); }
+
+  .error { margin-top: 28px; padding: 12px 14px; border-left: 3px solid var(--pencil); }
+
+  #result { margin-top: 40px; }
+  h2 { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+       color: var(--graphite); margin: 0 0 8px; }
+  h2:focus { outline: none; }
+  .answer { font: 19px/1.6 var(--serif); overflow-wrap: anywhere; }
+  .answer p { margin: 0 0 .7em; }
+  .answer ul, .answer ol { margin: 0 0 .7em; padding-left: 1.3em; }
+  .answer code { font: 15px/1.5 var(--mono); background: var(--band); padding: 1px 4px;
+                 border-radius: 3px; }
+  .ref { font: 500 12px var(--mono); vertical-align: super; color: var(--pencil);
+         text-decoration: none; padding: 0 1px; }
+  .unanswerable { font-style: italic; color: var(--graphite); }
+  .meter { font: 13px/1.6 var(--mono); color: var(--graphite); margin: 14px 0 0;
+           border-top: 1px solid var(--rule); padding-top: 10px; }
+  .meter b { color: var(--ink); font-weight: 500; }
+
+  /* Continuous-feed ledger paper: tractor holes down the margin, green bands per source. */
+  .ledger { margin-top: 36px; }
+  .ledger ol { list-style: none; margin: 0; padding: 0 0 0 28px; position: relative;
+               border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  .ledger ol::before {
+    content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 10px;
+    background: radial-gradient(circle at 5px 9px, var(--rule) 3.2px, transparent 3.6px) 0 0 / 10px 18px repeat-y;
+  }
+  .ledger li { position: relative; padding: 12px 14px 12px 34px; }
+  .ledger li:nth-child(odd) { background: var(--band); }
+  .tick { position: absolute; left: 8px; top: 13px; width: 20px; height: 16px;
+          transform: rotate(-7deg); }
+  .tick path { fill: none; stroke: var(--pencil); stroke-width: 2.4; stroke-linecap: round;
+               stroke-linejoin: round; }
+  .src-n { position: absolute; left: 12px; top: 12px; font: 500 13px var(--mono);
+           color: var(--graphite); }
+  li.cited .src-n { display: none; }
+  .cite { font: 500 14px/1.45 var(--mono); overflow-wrap: anywhere; }
+  .section { color: var(--graphite); font-size: 14px; }
+  .section a { white-space: nowrap; }
+  .excerpt { font: 14px/1.5 var(--serif); color: var(--graphite); margin: 6px 0 0;
+             overflow-wrap: anywhere; }
+  .excerpt.table { font: 12.5px/1.55 var(--mono); }
+  li:target { outline: 2px solid var(--pencil); outline-offset: -2px; }
+  details.more { margin-top: 18px; }
+  details.more > summary { cursor: pointer; font-size: 14px; color: var(--graphite); }
+  details.more .ledger { margin-top: 12px; }
+
+  footer { margin-top: 56px; border-top: 1px solid var(--rule); padding-top: 14px;
+           font-size: 14px; color: var(--graphite); }
+  footer p { margin: 0 0 6px; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    #result:not([hidden]) { animation: rise .25s ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="mark">finrag</span>
+    <h1>Ask a 10-K</h1>
+  </header>
+  <div class="scope">
+    Answers come from 30 annual reports (10-K filings) of 10 US companies, with the page each figure is on.
+    <details id="covered" hidden><summary>Companies and years covered</summary><ul id="companies"></ul></details>
+  </div>
+
+  <form id="ask">
+    <label for="q">Your question</label>
+    <textarea id="q" name="question" minlength="3" maxlength="300" required
+              placeholder="For example: Boeing's research and development spending in 2022"></textarea>
+    <div class="actions">
+      <button class="go" type="submit">Answer</button>
+      <span class="status" id="status" role="status" aria-live="polite"></span>
+    </div>
+  </form>
+  <div class="examples" id="examples" hidden>Try one:<br></div>
+
+  <div class="error" id="error" role="alert" hidden></div>
+
+  <section id="result" hidden aria-labelledby="answer-label">
+    <h2 id="answer-label" tabindex="-1">Answer</h2>
+    <div class="answer" id="answer"></div>
+    <p class="meter" id="meter"></p>
+
+    <div class="ledger" id="cited-wrap">
+      <h2>Passages it relies on</h2>
+      <ol id="cited"></ol>
+    </div>
+    <details class="more" id="others-wrap">
+      <summary id="others-label"></summary>
+      <div class="ledger"><ol id="others"></ol></div>
+    </details>
+  </section>
+
+  <footer>
+    <p>How good is it? On the 57 <a href="https://huggingface.co/datasets/PatronusAI/financebench">FinanceBench</a> questions about these filings, a Gemini grader judged 54 of this setup's answers correct (95%), at about $0.008 a question on average. <a href="https://github.com/CostisStavrou/financial-analyst-rag/blob/main/docs/EVALUATION.md">Method and caveats</a>.</p>
+    <p id="spend"></p>
+  </footer>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const el = tag => document.createElement(tag);
+const TICK = '<svg class="tick" viewBox="0 0 20 16" aria-hidden="true"><path d="M2 8.5 L7.5 14 L18.5 2"/></svg>';
+const fmt = n => n.toLocaleString("en-GB");
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+let busy = false;
+
+function spend(spent, cap) {
+  $("spend").textContent = `Demo limit: $${spent.toFixed(2)} of $${cap.toFixed(2)} in Gemini calls used today (UTC).`;
+}
+
+async function info() {
+  const r = await fetch("/api/info");
+  if (!r.ok) return;
+  const d = await r.json();
+  for (const c of d.companies) { const li = el("li"); li.textContent = c; $("companies").append(li); }
+  $("covered").hidden = !d.companies.length;
+  for (const q of d.examples) {
+    const b = el("button");
+    b.type = "button";
+    b.textContent = q;
+    b.addEventListener("click", () => { $("q").value = q; ask(); });
+    $("examples").append(b);
+  }
+  $("examples").hidden = !d.examples.length;
+  spend(d.spent_today_usd, d.cap_usd_per_day);
+}
+
+// The model writes plain text with some Markdown (bold, lists, headings) and sometimes LaTeX
+// for formulas. A small, safe subset is rendered with DOM nodes; nothing is parsed as HTML.
+function tidyMath(s) {
+  let t = s.replace(//g, "$");
+  for (let i = 0; i < 6; i++) {
+    const before = t;
+    t = t.replace(/\\(?:text|mathrm|textbf)\{([^{}]*)\}/g, "$1")
+         .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1) ÷ ($2)");
+    if (t === before) break;
+  }
+  return t.replace(/\\approx/g, "≈").replace(/\\times/g, "×").replace(/\\cdot/g, "·")
+          .replace(/\\div/g, "÷").replace(/\\%/g, "%").replace(/\\,|\\;|\\ /g, " ")
+          .replace(/\\(?:left|right)/g, "").replace(/\\([A-Za-z]+)/g, "$1")
+          .replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function refs(list, n, into) {
+  list.split(",").map(s => +s.trim()).forEach((k, i) => {
+    if (i) into.append(" ");
+    if (k < 1 || k > n) { into.append(`[${k}]`); return; }
+    const a = el("a");
+    a.className = "ref"; a.href = `#src-${k}`; a.textContent = k;
+    a.setAttribute("aria-label", `source ${k}`);
+    a.addEventListener("click", () => { $("others-wrap").open = true; });
+    into.append(a);
+  });
+}
+
+// Formulas are taken out first (as <index>) so that their * and [ ] aren't read
+// as Markdown; nested calls for bold and italics share the same list.
+function inline(text, n, into, maths = null) {
+  let t = text;
+  if (!maths) {
+    maths = [];
+    t = text.replace(/\\\$/g, "")
+      .replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]*\\[A-Za-z][^$\n]*)\$/g, (_, a, b) => {
+        maths.push(tidyMath(a ?? b));
+        return `${maths.length - 1}`;
+      })
+      .replace(//g, "$");
+  }
+  for (const part of t.split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|\[\d+(?:\s*,\s*\d+)*\]|\d+)/)) {
+    if (!part) continue;
+    let m;
+    if ((m = part.match(/^\*\*([^*]+)\*\*$/))) { const b = el("strong"); inline(m[1], n, b, maths); into.append(b); }
+    else if ((m = part.match(/^\*([^*]+)\*$/))) { const i = el("em"); inline(m[1], n, i, maths); into.append(i); }
+    else if ((m = part.match(/^\[([\d,\s]+)\]$/))) refs(m[1], n, into);
+    else if ((m = part.match(/^(\d+)$/))) { const c = el("code"); c.textContent = maths[+m[1]]; into.append(c); }
+    else into.append(part);
+  }
+}
+
+function renderAnswer(text, n) {
+  const box = $("answer");
+  box.replaceChildren();
+  let list = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { list = null; continue; }
+    let m;
+    if ((m = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/))) {
+      const ordered = /^\s*\d/.test(line);
+      if (!list || (list.tagName === "OL") !== ordered) { list = el(ordered ? "ol" : "ul"); box.append(list); }
+      const li = el("li"); inline(m[1], n, li); list.append(li);
+      continue;
+    }
+    list = null;
+    const p = el("p");
+    if ((m = line.match(/^#{1,6}\s+(.*)$/))) { const s = el("strong"); inline(m[1], n, s); p.append(s); }
+    else inline(line, n, p);
+    box.append(p);
+  }
+}
+
+function sourceItem(s) {
+  const li = el("li");
+  li.id = `src-${s.n}`;
+  if (s.cited) { li.className = "cited"; li.insertAdjacentHTML("afterbegin", TICK); }
+  const n = el("span");
+  n.className = "src-n"; n.textContent = s.n;
+  const cite = el("div");
+  cite.className = "cite";
+  cite.textContent = `[${s.n}] ${s.company} ${s.document} FY${s.fiscal_year}, ${s.pages}${s.table ? ", table" : ""}`;
+  const sec = el("div");
+  sec.className = "section";
+  sec.append(`${s.section} · `);
+  const a = el("a");
+  a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  a.textContent = "open the filing on SEC.gov ↗";
+  sec.append(a);
+  const ex = el("p");
+  ex.className = s.table ? "excerpt table" : "excerpt"; ex.textContent = s.excerpt;
+  li.append(n, cite, sec, ex);
+  return li;
+}
+
+function render(d) {
+  renderAnswer(d.answer, d.sources.length);
+  if (!d.answerable) {
+    const p = el("p");
+    p.className = "unanswerable";
+    p.textContent = "The passages it searched don't hold this answer.";
+    $("answer").prepend(p);
+  }
+  const cited = d.sources.filter(s => s.cited), others = d.sources.filter(s => !s.cited);
+  $("cited").replaceChildren(...cited.map(sourceItem));
+  $("cited-wrap").hidden = !cited.length;
+  $("others").replaceChildren(...others.map(sourceItem));
+  $("others-label").textContent = cited.length
+    ? `Also read: ${plural(others.length, "more passage")} it didn't cite`
+    : `The ${plural(others.length, "passage")} it read`;
+  $("others-wrap").hidden = !others.length;
+  $("others-wrap").open = !cited.length;
+  $("meter").replaceChildren();
+  const parts = [
+    ["cost", `$${d.usd.toFixed(4)}`],
+    ["answer", `${(d.answer_ms / 1000).toFixed(1)} s`],
+    ["search", `${(d.search_ms / 1000).toFixed(1)} s`],
+    ["tokens", `${fmt(d.input_tokens)} in / ${fmt(d.output_tokens)} out`],
+  ];
+  for (const [k, v] of parts) {
+    const b = el("b");
+    b.textContent = v;
+    $("meter").append(`${k} `, b, " · ");
+  }
+  $("meter").append(d.model + (d.cached ? " · saved reply, shown with its original cost and time" : ""));
+  spend(d.spent_today_usd, d.cap_usd_per_day);
+  $("result").hidden = false;
+  $("status").textContent = d.answerable
+    ? `Answer ready, citing ${plural(cited.length, "passage")}.`
+    : "Answer ready: the passages it searched don't hold this answer.";
+}
+
+async function message(r) {
+  if (r.status === 422) return "Questions need 3 to 300 characters.";
+  try {
+    const d = await r.json();
+    if (typeof d.detail === "string") return d.detail;
+  } catch { /* not JSON: a proxy or server error page */ }
+  return "The server had a problem. Try again in a minute.";
+}
+
+async function ask() {
+  if (busy) return;
+  const question = $("q").value.trim();
+  if (question.length < 3) { $("q").reportValidity(); return; }
+  busy = true;
+  document.querySelectorAll("button").forEach(b => { b.disabled = true; });
+  $("error").hidden = true;
+  $("result").hidden = true;
+  const started = Date.now();
+  $("status").textContent = "Searching the filings and reading the 10 most relevant passages… usually 5 to 20 seconds.";
+  const timer = setInterval(() => {
+    $("status").textContent = `Still working (${Math.round((Date.now() - started) / 1000)} s)…`;
+  }, 12000);
+  const stop = new AbortController();
+  const timeout = setTimeout(() => stop.abort(), 90000);
+  let done = false;
+  try {
+    const r = await fetch("/api/answer", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question}), signal: stop.signal,
+    });
+    if (!r.ok) throw new Error(await message(r));
+    render(await r.json());
+    done = true;
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("result").scrollIntoView({behavior: still ? "auto" : "smooth", block: "start"});
+    $("answer-label").focus({preventScroll: true});
+  } catch (e) {
+    $("error").textContent = e.name === "AbortError"
+      ? "This is taking much longer than usual. Try again in a minute."
+      : e instanceof TypeError ? "The server didn't respond. Check it is running and try again."
+      : e.message;
+    $("error").hidden = false;
+  } finally {
+    clearInterval(timer);
+    clearTimeout(timeout);
+    busy = false;
+    document.querySelectorAll("button").forEach(b => { b.disabled = false; });
+    if (!done) $("status").textContent = "";
+  }
+}
+
+$("ask").addEventListener("submit", e => { e.preventDefault(); ask(); });
+$("q").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ask(); }
+});
+info();
+</script>
+</body>
+</html>

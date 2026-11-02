@@ -32,9 +32,10 @@ SCHEMA = {
 }
 
 
-def answerer(settings, model: str = MODEL, budget: Budget | None = None) -> LLM:
+def answerer(settings, model: str = MODEL, budget: Budget | None = None,
+             max_output_tokens: int | None = None) -> LLM:
     return LLM(settings.gemini_api_key, model, settings.cache_dir, SYSTEM, SCHEMA,
-               budget=budget)
+               budget=budget, max_output_tokens=max_output_tokens)
 
 
 def build_prompt(question: str, hits: list[Hit]) -> str:

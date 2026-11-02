@@ -312,6 +312,22 @@ def cmd_eval_replay(args) -> None:
     print(f"\nper-question detail: {detail}\nsummary without FinanceBench text: {public}")
 
 
+def cmd_serve(args) -> None:
+    import psycopg
+    import uvicorn
+
+    from finrag.web.app import from_settings
+
+    try:
+        app = from_settings(get_settings(), args.usd_per_day)
+    except psycopg.OperationalError as e:
+        raise RuntimeError("Can't reach the database. Is it running? (docker compose up -d)"
+                           ) from e
+    print(f"finrag demo on http://{args.host}:{args.port} (fresh Gemini calls capped at "
+          f"${args.usd_per_day:.2f} a day)")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+
+
 def cmd_stats(args) -> None:
     from finrag.index import db
 
@@ -545,6 +561,13 @@ def main(argv: list[str] | None = None) -> None:
                         help="replay the saved agent run's plans through today's retrieval, "
                              "with no API calls")
     rp.set_defaults(func=cmd_eval_replay)
+
+    sv = sub.add_parser("serve", help="the web demo: ask a question, see the cited pages")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--usd-per-day", type=float, default=1.0,
+                    help="cap on fresh Gemini calls a day (UTC); saved replies are free")
+    sv.set_defaults(func=cmd_serve)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")
     st.set_defaults(func=cmd_stats)

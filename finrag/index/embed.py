@@ -16,6 +16,7 @@ import hashlib
 import logging
 import re
 import sqlite3
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -30,7 +31,9 @@ log = logging.getLogger(__name__)
 class EmbeddingCache:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path)
+        # the web app calls it from worker threads, so one statement at a time
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.lock = threading.Lock()
         self.db.execute("CREATE TABLE IF NOT EXISTS emb (key TEXT PRIMARY KEY, vec BLOB)")
 
     @staticmethod
@@ -42,16 +45,19 @@ class EmbeddingCache:
         for i in range(0, len(keys), 500):
             part = keys[i : i + 500]
             q = f"SELECT key, vec FROM emb WHERE key IN ({','.join('?' * len(part))})"
-            for k, blob in self.db.execute(q, part):
+            with self.lock:
+                rows = self.db.execute(q, part).fetchall()
+            for k, blob in rows:
                 out[k] = np.frombuffer(blob, dtype=np.float32)
         return out
 
     def put_many(self, items: dict[str, np.ndarray]) -> None:
-        self.db.executemany(
-            "INSERT OR REPLACE INTO emb (key, vec) VALUES (?, ?)",
-            [(k, v.astype(np.float32).tobytes()) for k, v in items.items()],
-        )
-        self.db.commit()
+        with self.lock:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO emb (key, vec) VALUES (?, ?)",
+                [(k, v.astype(np.float32).tobytes()) for k, v in items.items()],
+            )
+            self.db.commit()
 
 
 def _normalise(v: np.ndarray) -> np.ndarray:
