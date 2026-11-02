@@ -55,7 +55,7 @@ More detail: [docs/BUILD.md](docs/BUILD.md).
 Needs Python 3.11+, Docker and a Gemini API key. Embedding the whole corpus on a paid key costs about $0.55 and takes 4–5 minutes (estimated from $0.53 and 250 s measured for about 11,400 of the 12,103 chunks). A free-tier key embeds only about 1,000 chunks a day ([docs/BUILD.md](docs/BUILD.md)): the full index takes about 13 daily runs of `scripts/embed_daily.sh`; a same-day start is below.
 
 ```bash
-git clone <this repo> financial-analyst-rag && cd financial-analyst-rag
+git clone https://github.com/CostisStavrou/financial-analyst-rag.git && cd financial-analyst-rag
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env    # fill in SEC_USER_AGENT (name + email) and GEMINI_API_KEY
 docker compose up -d    # Postgres 17 + pgvector on localhost:5433
