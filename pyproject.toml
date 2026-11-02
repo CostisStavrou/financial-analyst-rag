@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finrag"
 version = "0.1.0"
-description = "Multi-agent RAG over SEC 10-K filings, evaluated on FinanceBench"
+description = "RAG over SEC 10-K filings with Gemini and pgvector, one call against a multi-agent pipeline, evaluated on FinanceBench"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

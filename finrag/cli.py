@@ -258,6 +258,60 @@ def cmd_eval_agents(args) -> None:
     print(f"\nper-question detail: {detail}\nsummary without FinanceBench text: {public}")
 
 
+def cmd_eval_replay(args) -> None:
+    from datetime import datetime
+
+    from finrag.agents import pipeline
+    from finrag.config import ROOT
+    from finrag.eval import answers, financebench, replay, retrieval
+    from finrag.index import db
+    from finrag.index.embed import make_embedder
+    from finrag.ingest.build import load_chunks
+
+    s = get_settings()
+    runs = s.data_dir / "eval" / "agents_runs.jsonl"
+    recorded = ROOT / "results" / "agents.json"
+    if not runs.exists():
+        raise RuntimeError(f"{runs} not found: the replay needs the saved agent run.")
+    embedder = make_embedder(s, offline=True)  # reads the cache only: no API call possible
+    rows = financebench.load(financebench.download(s.data_dir))
+    chunks = load_chunks(s.parsed_dir)
+    questions = [q for q in retrieval.load_questions(rows, load_companies(), chunks)
+                 if q.passages]
+    conn = db.connect(s.database_url)
+    retrieval.check_index(conn, chunks, s.embed_model)
+    plans = {r["id"]: r["plan"] for r in map(json.loads, runs.read_text().splitlines())}
+    old = {r["id"]: r for r in json.loads(recorded.read_text())["questions"]}
+    missing = [q.id for q in questions if not plans.get(q.id) or q.id not in old]
+    if missing:
+        raise RuntimeError(f"{len(missing)} questions have no saved plan or recorded result "
+                           f"(first: {missing[0]}); the replay needs the run behind {recorded}.")
+    results = replay.run(questions, plans, old, conn, embedder, s.embed_model, load_companies())
+    summary = replay.report(results)
+    meta = {
+        "method": "replay of the saved agent run's plans; retrieval only, no answers generated "
+                  "or graded",
+        "api_calls": 0 if embedder.impl is None else "not guaranteed: embedder not offline",
+        "query_embeddings": f"{embedder.cache_hits} read from the cache (the embedder is offline)",
+        "plans": "data/eval/agents_runs.jsonl, the run behind results/agents.json",
+        "agent_sources": {"question_top_k": pipeline.K_QUESTION,
+                          "search_top_k": pipeline.K_SEARCH,
+                          "max_sources": pipeline.MAX_SOURCES, "merge": pipeline.MERGE,
+                          "recorded": "results/agents.json evidence_in_context: the question's "
+                                      "lists first, then the planner's, then the cap"},
+        "planner_filter": f"the question's top {answers.K} within the planned company, and the "
+                          "planned year when exactly one is left after dropping years not in "
+                          "the corpus (as retrieve() does)",
+        "code": _git_version(),
+        "run_at": datetime.now().isoformat(timespec="seconds"),
+        "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (no question text here)",
+    }
+    detail, public = retrieval.save("replay_retrieval", meta, summary, results, s.data_dir,
+                                    ROOT / "results", public_row=dict)
+    print(replay.format_report(summary))
+    print(f"\nper-question detail: {detail}\nsummary without FinanceBench text: {public}")
+
+
 def cmd_stats(args) -> None:
     from finrag.index import db
 
@@ -486,6 +540,11 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--max-usd", type=float, help="stop once the agent runs have cost this much")
     ev.add_argument("--tag", help="name a new run: results/agents_<tag>.json, its own runs file")
     ev.set_defaults(func=cmd_eval_agents)
+
+    rp = sub.add_parser("eval-replay",
+                        help="replay the saved agent run's plans through today's retrieval, "
+                             "with no API calls")
+    rp.set_defaults(func=cmd_eval_replay)
 
     st = sub.add_parser("stats", help="chunk and embedding counts per filing")
     st.set_defaults(func=cmd_stats)

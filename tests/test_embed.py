@@ -1,7 +1,8 @@
 import numpy as np
+import pytest
 
 from finrag.index import embed
-from finrag.index.embed import GeminiEmbedder, RateLimited
+from finrag.index.embed import Embedder, EmbeddingCache, GeminiEmbedder, RateLimited
 
 
 def make(monkeypatch, fail_first: int = 0, rpm: int = 0) -> tuple[GeminiEmbedder, list]:
@@ -57,3 +58,12 @@ def test_financebench_filings_first():
         {"company": "Nike", "doc_type": "10k", "doc_period": 2022},  # company not in corpus
     ]
     assert question_filings(rows, cos) == [("AMD", 2022), ("MMM", 2018)]
+
+
+def test_an_offline_embedder_reads_the_cache_and_never_calls_the_api(tmp_path):
+    e = Embedder("gemini", "m", 3, api_key="", cache_dir=tmp_path, offline=True)
+    v = np.array([1, 0, 0], dtype=np.float32)
+    e.cache.put_many({EmbeddingCache.key("m", 3, "RETRIEVAL_QUERY", "cached"): v})
+    assert (e.embed_query("cached") == v).all()
+    with pytest.raises(RuntimeError, match="offline"):
+        e.embed_query("not cached")

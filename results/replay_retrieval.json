@@ -1,0 +1,165 @@
+{"meta": {
+ "method": "replay of the saved agent run's plans; retrieval only, no answers generated or graded",
+ "api_calls": 0,
+ "query_embeddings": "225 read from the cache (the embedder is offline)",
+ "plans": "data/eval/agents_runs.jsonl, the run behind results/agents.json",
+ "agent_sources": {
+  "question_top_k": 10,
+  "search_top_k": 5,
+  "max_sources": 20,
+  "merge": "round-robin by rank",
+  "recorded": "results/agents.json evidence_in_context: the question's lists first, then the planner's, then the cap"
+ },
+ "planner_filter": "the question's top 10 within the planned company, and the planned year when exactly one is left after dropping years not in the corpus (as retrieve() does)",
+ "code": "abb9b14 + uncommitted changes",
+ "run_at": "2026-11-02T01:37:55",
+ "dataset": "PatronusAI/financebench, CC BY-NC 4.0 (no question text here)"
+},
+"summary": {
+ "agent_sources": {
+  "recorded": {
+   "n": 50,
+   "of": 57,
+   "wilson95": [
+    0.7675,
+    0.9392
+   ]
+  },
+  "replay": {
+   "n": 54,
+   "of": 57,
+   "wilson95": [
+    0.8563,
+    0.9819
+   ]
+  },
+  "change": {
+   "gained": [
+    "financebench_id_00684",
+    "financebench_id_00723",
+    "financebench_id_00685",
+    "financebench_id_00678",
+    "financebench_id_00464"
+   ],
+   "lost": [
+    "financebench_id_00720"
+   ],
+   "mcnemar_p": 0.2188
+  }
+ },
+ "planner_filter": {
+  "filtered_by": {
+   "company_and_year": 38,
+   "company_only": 19,
+   "none": 0
+  },
+  "hit5": {
+   "unfiltered": {
+    "n": 49,
+    "of": 57,
+    "wilson95": [
+     0.7468,
+     0.9271
+    ]
+   },
+   "planner_filter": {
+    "n": 51,
+    "of": 57,
+    "wilson95": [
+     0.7888,
+     0.9509
+    ]
+   },
+   "change": {
+    "gained": [
+     "financebench_id_00499",
+     "financebench_id_00215"
+    ],
+    "lost": [],
+    "mcnemar_p": 0.5
+   }
+  },
+  "hit10": {
+   "unfiltered": {
+    "n": 54,
+    "of": 57,
+    "wilson95": [
+     0.8563,
+     0.9819
+    ]
+   },
+   "planner_filter": {
+    "n": 54,
+    "of": 57,
+    "wilson95": [
+     0.8563,
+     0.9819
+    ]
+   },
+   "change": {
+    "gained": [],
+    "lost": [],
+    "mcnemar_p": 1.0
+   }
+  }
+ }
+},
+"questions": [
+{"id": "financebench_id_03029", "plan_years": [2018], "filter": {"ticker": "MMM", "fiscal_year": 2018}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04672", "plan_years": [2018], "filter": {"ticker": "MMM", "fiscal_year": 2018}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00499", "plan_years": [2022], "filter": {"ticker": "MMM", "fiscal_year": 2022}, "sources": 18, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01226", "plan_years": [2021, 2022], "filter": {"ticker": "MMM", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01865", "plan_years": [2022], "filter": {"ticker": "MMM", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_03882", "plan_years": [2020], "filter": {"ticker": "AMCR", "fiscal_year": 2020}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00799", "plan_years": [2022, 2023], "filter": {"ticker": "AMCR", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01079", "plan_years": [2021, 2022, 2023], "filter": {"ticker": "AMCR", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01148", "plan_years": [], "filter": {"ticker": "AMCR", "fiscal_year": null}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00684", "plan_years": [2020, 2022, 2023], "filter": {"ticker": "AMCR", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": true}, "planner_filter": {"hit5": false, "hit10": true}},
+{"id": "financebench_id_03069", "plan_years": [2015], "filter": {"ticker": "AMD", "fiscal_year": 2015}, "sources": 13, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00222", "plan_years": [2022], "filter": {"ticker": "AMD", "fiscal_year": 2022}, "sources": 17, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00995", "plan_years": [2022], "filter": {"ticker": "AMD", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01198", "plan_years": [2021, 2022], "filter": {"ticker": "AMD", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00917", "plan_years": [2021, 2022], "filter": {"ticker": "AMD", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01279", "plan_years": [2022], "filter": {"ticker": "AMD", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00563", "plan_years": [2021, 2022], "filter": {"ticker": "AMD", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00757", "plan_years": [2022], "filter": {"ticker": "AMD", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00476", "plan_years": [2022], "filter": {"ticker": "AXP", "fiscal_year": 2022}, "sources": 15, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01028", "plan_years": [2022], "filter": {"ticker": "AXP", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00723", "plan_years": [2020, 2021, 2022], "filter": {"ticker": "AXP", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00720", "plan_years": [2021, 2022], "filter": {"ticker": "AXP", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": false, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01351", "plan_years": [2021, 2022], "filter": {"ticker": "AXP", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01964", "plan_years": [2022], "filter": {"ticker": "AXP", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01981", "plan_years": [2022], "filter": {"ticker": "AXP", "fiscal_year": 2022}, "sources": 18, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_02608", "plan_years": [2017], "filter": {"ticker": "BBY", "fiscal_year": 2017}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04417", "plan_years": [2019], "filter": {"ticker": "BBY", "fiscal_year": 2019}, "sources": 12, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00685", "plan_years": [2017, 2019, 2023], "filter": {"ticker": "BBY", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": false}, "planner_filter": {"hit5": false, "hit10": false}},
+{"id": "financebench_id_01077", "plan_years": [2023, 2022, 2021], "filter": {"ticker": "BBY", "fiscal_year": 2023}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01275", "plan_years": [2023], "filter": {"ticker": "BBY", "fiscal_year": 2023}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_10285", "plan_years": [2018], "filter": {"ticker": "BA", "fiscal_year": 2018}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00517", "plan_years": [2022], "filter": {"ticker": "BA", "fiscal_year": 2022}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01091", "plan_years": [2022], "filter": {"ticker": "BA", "fiscal_year": 2022}, "sources": 13, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00678", "plan_years": [2018, 2021, 2022], "filter": {"ticker": "BA", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": true}, "planner_filter": {"hit5": false, "hit10": true}},
+{"id": "financebench_id_01290", "plan_years": [2022], "filter": {"ticker": "BA", "fiscal_year": 2022}, "sources": 11, "evidence_in_sources_recorded": false, "evidence_in_sources": false, "unfiltered": {"hit5": false, "hit10": false}, "planner_filter": {"hit5": false, "hit10": false}},
+{"id": "financebench_id_00464", "plan_years": [2018, 2021, 2022], "filter": {"ticker": "BA", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": true}, "planner_filter": {"hit5": false, "hit10": true}},
+{"id": "financebench_id_00494", "plan_years": [], "filter": {"ticker": "BA", "fiscal_year": null}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00585", "plan_years": [2021, 2022], "filter": {"ticker": "BA", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": false, "evidence_in_sources": false, "unfiltered": {"hit5": false, "hit10": false}, "planner_filter": {"hit5": false, "hit10": false}},
+{"id": "financebench_id_05915", "plan_years": [2017, 2018], "filter": {"ticker": "CVS", "fiscal_year": 2018}, "sources": 15, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00790", "plan_years": [2022], "filter": {"ticker": "CVS", "fiscal_year": 2022}, "sources": 19, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01107", "plan_years": [2020, 2021, 2022], "filter": {"ticker": "CVS", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01244", "plan_years": [2022], "filter": {"ticker": "CVS", "fiscal_year": 2022}, "sources": 13, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04103", "plan_years": [2018, 2019], "filter": {"ticker": "GIS", "fiscal_year": 2019}, "sources": 13, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_03471", "plan_years": [2020], "filter": {"ticker": "GIS", "fiscal_year": 2020}, "sources": 15, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04854", "plan_years": [2020], "filter": {"ticker": "GIS", "fiscal_year": 2020}, "sources": 12, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_10136", "plan_years": [2022], "filter": {"ticker": "GIS", "fiscal_year": 2022}, "sources": 16, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04980", "plan_years": [2021], "filter": {"ticker": "PEP", "fiscal_year": 2021}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01009", "plan_years": [2022], "filter": {"ticker": "PEP", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00735", "plan_years": [2021, 2022], "filter": {"ticker": "PEP", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_01328", "plan_years": [2022], "filter": {"ticker": "PEP", "fiscal_year": 2022}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_03620", "plan_years": [2022], "filter": {"ticker": "PEP", "fiscal_year": 2022}, "sources": 15, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_04481", "plan_years": [2022], "filter": {"ticker": "PEP", "fiscal_year": 2022}, "sources": 15, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00859", "plan_years": [2021], "filter": {"ticker": "VZ", "fiscal_year": 2021}, "sources": 11, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_02024", "plan_years": [2021], "filter": {"ticker": "VZ", "fiscal_year": 2021}, "sources": 10, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00216", "plan_years": [2022], "filter": {"ticker": "VZ", "fiscal_year": 2022}, "sources": 17, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00215", "plan_years": [2022], "filter": {"ticker": "VZ", "fiscal_year": 2022}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": false, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}},
+{"id": "financebench_id_00566", "plan_years": [2021, 2022], "filter": {"ticker": "VZ", "fiscal_year": null}, "sources": 20, "evidence_in_sources_recorded": true, "evidence_in_sources": true, "unfiltered": {"hit5": true, "hit10": true}, "planner_filter": {"hit5": true, "hit10": true}}
+]}

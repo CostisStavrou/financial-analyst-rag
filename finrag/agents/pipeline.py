@@ -87,6 +87,31 @@ def _eval(node: ast.AST) -> float:
     raise ValueError("only numbers, + - * / ** %, parentheses, abs, round, min, max, sqrt")
 
 
+_MULTI_ARG = {"round", "min", "max"}
+
+
+def _drop_thousands(expression: str) -> str:
+    """1,577 and 1,000,000 lose their commas. Inside round, min or max a comma may also
+    separate arguments, so there max(100,200) and max(1,577) are refused rather than guessed;
+    max(100, 200) is fine. A comma after a decimal or exponent (0.5,123) is left, so the
+    expression fails to parse instead of becoming another number."""
+    out, calls = [], []  # per open parenthesis: the function it calls, or "" for grouping
+    for i, ch in enumerate(expression):
+        if ch == "(":
+            name = re.search(r"([A-Za-z_]\w*)\s*$", expression[:i])
+            calls.append(name.group(1) if name else "")
+        elif ch == ")" and calls:
+            calls.pop()
+        elif (ch == "," and re.search(r"(?<![\w.])\d{1,3}(,\d{3})*$", expression[:i])
+              and re.match(r"\d{3}(?![\d.eE])", expression[i + 1 :])):
+            if calls and calls[-1] in _MULTI_ARG:
+                raise ValueError("a comma between digits inside round, min or max is ambiguous: "
+                                 "write numbers without thousands separators, as max(100, 200)")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def calculate(expression: str) -> dict:
     """Evaluate an arithmetic expression exactly as written, e.g. "(34229 - 31750) / 31750 * 100".
 
@@ -95,9 +120,7 @@ def calculate(expression: str) -> dict:
             and abs, round, min, max, sqrt.
     """
     try:
-        # thousands separators (1,577) go; commas between arguments (round(x, 2)) stay
-        plain = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", expression)
-        value = _eval(ast.parse(plain, mode="eval").body)
+        value = _eval(ast.parse(_drop_thousands(expression), mode="eval").body)
         if abs(value) > 1e18:
             raise ValueError("result too large")
         return {"expression": expression, "result": round(value, 10)}

@@ -11,7 +11,17 @@ def test_calculator_does_arithmetic_and_nothing_else():
     assert calculate("(34229 - 31750) / 31750 * 100")["result"] == round(
         (34229 - 31750) / 31750 * 100, 10)
     assert calculate("1,577 + 3")["result"] == 1580  # thousands separators are dropped
+    assert calculate("(1,577 - 1,000) / 2")["result"] == 288.5
     assert calculate("round(2 ** 0.5, 3) + abs(-1) + max(1, 2)")["result"] == 4.414
+    assert calculate("max(100, 200)")["result"] == 200
+    # inside a call, 100,200 could be two arguments or one number: refused, never guessed
+    for ambiguous in ("max(100,200)", "max(100,200, 5)", "round(1,577 / 3, 2)"):
+        assert "ambiguous" in calculate(ambiguous)["error"], ambiguous
+    # one-argument functions can't be ambiguous; nor can grouping parentheses
+    assert calculate("abs(-1,577) + sqrt(1,000,000) + (2,000)")["result"] == 4577
+    # a comma after a decimal, an exponent or a 4+ digit run is not a thousands separator
+    for bad in ("0.5,123", "2.5,000 * 2", "1e3,000", "12345,678", "1,5000"):
+        assert "error" in calculate(bad), bad
     for bad in ("__import__('os').system('ls')", "x + 1", "1 / 0", "9 ** 9 ** 9",
                 "open('f')", "(1).real"):
         assert "error" in calculate(bad), bad

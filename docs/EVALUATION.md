@@ -10,7 +10,7 @@ FinanceBench's 57 questions on the 30 indexed filings, no filter given:
 |---|---|---|---|---|
 | Vector only, one `gemini-3.8-flash` call over the top 10 | **86%** (49/57; CI 75–93%) | **95%** (54/57; CI 86–98%). Strict, both graders: 91% (52/57) ([results](#results-95-correct-with-no-filter)) | $0.0077 (answer; retrieval $0.000006) | 279 ms embed + 3 ms search + 7.5 s answer ¹ |
 | Hybrid (BM25 + vector, RRF) | 53% (30/57; CI 40–65%) ([why lower](#results-hybrid-is-worse-than-vector-alone)) | – | $0.000006 (query embedding only) | 279 ms embed + 124 ms search ¹ |
-| Agents (ADK: planner, retriever, analyst + calculator, verifier) | – (an evidence page reached the sources for 50/57) | 91% (52/57; CI 81–96%), Gemini grader only ([results](#results-no-better-than-one-call-at-8-the-cost)) | $0.064 | 32.7 s, end to end |
+| Agents (ADK: planner, retriever, analyst + calculator, verifier) | – (an evidence page reached the sources for 50/57; 54/57 with the fixed merge, [replayed offline](#replay-with-the-fixed-merge-no-api-calls)) | 91% (52/57; CI 81–96%), Gemini grader only ([results](#results-no-better-than-one-call-at-8-the-cost)) | $0.064 | 32.7 s, end to end |
 
 CI: 95% Wilson interval. ¹ Medians from separate runs: query embedding from [`retrieval_vector_before_reindex.json`](../results/retrieval_vector_before_reindex.json) (later runs read the embedding cache), vector search from [`retrieval_vector.json`](../results/retrieval_vector.json), hybrid search from [`latency_hybrid.json`](../results/latency_hybrid.json), the answer call from [`answers.json`](../results/answers.json) (4 calls at a time). The agents' 32.7 s includes retrieval and every step, one question at a time.
 
@@ -106,7 +106,7 @@ The 8 questions with no evidence page in the no-filter top 5:
 
 - Query decomposition (one sub-query per statement) for ratio questions: 3M's and CVS's income statements and Verizon's revenue table are not in the top 20.
 - Reranking the top 20, or smaller chunks, for sentences buried in long chunks (Boeing customers).
-- Extracting the company and year from the question: the right filing lifts hit@5 from 86% to 95%.
+- Extracting the company and year from the question: the right filing lifts hit@5 from 86% to 95%. (Measured later with the agents' planner choosing: 51 of 57, and the evidence in the top 10 for the same 54 questions; [see below](#replay-with-the-fixed-merge-no-api-calls).)
 
 ## Hybrid search: keyword + vector
 
@@ -237,7 +237,7 @@ One real run on 31 Oct 2026: 171 answers (57 questions × 3 settings) and 171 gr
   - **Boeing tax rate (00585).** The filing's own figures, (0.6)% and 14.7%, with the opposite sign convention to the reference.
   - **Best Buy gross margins (00685).** The right conclusion from FY2013–2019 data, because the FY2022–23 pages weren't retrieved.
   - The strictest count, correct by both graders, is in the table: 52 of 57 with no filter.
-- **Retrieval is rarely the limit.** With no filter, the 10 chunks held an evidence page for 54 questions, and 52 of those were answered correctly. Of the 3 questions whose evidence page wasn't retrieved, 2 were still answered correctly (both Boeing) from other pages. One of them, the tax rate (00585), is a known label miss. The settings don't differ beyond chance: 1 question each way between no filter and company + year, and 0 against 2 between no filter and evidence pages (p = 0.5).
+- **Retrieval is rarely the limit.** With no filter, the 10 chunks held an evidence page for 54 questions, and 52 of those were answered correctly. Of the 3 questions whose evidence page wasn't retrieved, 2 were still answered correctly (both Boeing) from other pages. One of them, the tax rate (00585), is a known label miss. The settings don't differ beyond chance: 1 question each way between no filter and company + year, and 0 against 2 between no filter and evidence pages (p = 0.5). So on these 57 questions the right filing, given by hand, lifts retrieval (hit@5 86% → 95%) but not answers: 54 either way.
 - **What's wrong** with the 3 incorrect no-filter answers (Gemini grader):
   - **CVS "capital intensive?" (00790):** "no" in all three settings, where the reference says "yes" on the strength of a low return on assets. The model reasoned from fixed assets.
   - **Best Buy (00685)** and **Verizon (00215):** as above.
@@ -249,7 +249,9 @@ One real run on 31 Oct 2026: 171 answers (57 questions × 3 settings) and 171 gr
 - **Latency** (no filter, 4 calls at a time): answering takes 7.5 s median and 20.4 s p95. That dwarfs retrieval (about 0.3 s).
 - **Caveats.**
   - 57 questions is a small test, as the interval of 86–98% shows.
-  - FinanceBench has been public since 2023, so the models may have seen some of its questions. Nothing here rules that out.
+  - FinanceBench has been public since 2023, so the models may have seen some of its questions. Nothing here rules that out; answering with no sources at all would test it, and hasn't been run.
+  - **Against the paper (indicative only).** The [FinanceBench paper](https://arxiv.org/abs/2311.11944) (Islam et al., 2023, Table 2) scored GPT-4-Turbo on all 150 questions: 19% correct with one vector store over all 360 filings, 50% with a store for the right filing, 85% given the evidence pages. The three settings here follow those: 95%, 95% and 98%, on 57 of the 150. The no-filter setting is far easier than the paper's shared store (30 filings, not 360, and every top-20 chunk came from the right company), so the closer comparisons are the other two. Even those differ in the model (much newer here), the grading (the paper's answers were labelled by people, these by a Gemini grader), the retrieval stack and prompts, and the questions (10-K only, 57 of the sample's 112 10-K questions, from roughly the 10 companies with the most of them, [docs/BUILD.md](BUILD.md)). How much each explains isn't measured.
+  - There is no development set: the gold labels, the chunking and the HNSW fix were all worked out on these 57 questions.
   - The answers include their working (median 112 words). The graders score the conclusion and the figures, not the length.
 - **Results:**
   - [`results/answers.json`](../results/answers.json) (labels, citations, chunk ids, tokens, cost; no FinanceBench text and no answers);
@@ -291,7 +293,7 @@ One real run on 1 Nov 2026, after a smoke test on a question of my own: PepsiCo 
   - The retriever searched one year at a time, in the order the planner listed them (oldest first in both cases), then kept the first 20 chunks. That cut the most recent year, the one asked about, so the analyst correctly refused: "the sources only cover through FY2022".
   - This is why an evidence page reached the sources for only 50 of 57 questions, against 54 for the single call's top 10.
   - More precisely, the question's own top 10 came first for every planned year: with two years they alone filled the cap of 20, so none of the planner's searches reached the analyst; with three, the third year was cut as well.
-  - **Fixed in code on 1 Nov, after this run:** the ranked lists (one per search and year) are now merged rank by rank, so every year and search gets in under the cap ([`tests/test_agents.py`](../tests/test_agents.py)). Not yet re-measured; a re-run will be a new, labelled row.
+  - **Fixed in code on 1 Nov, after this run:** the ranked lists (one per search and year) are now merged rank by rank, so every year and search gets in under the cap ([`tests/test_agents.py`](../tests/test_agents.py)). Retrieval with the fix was replayed offline ([below](#replay-with-the-fixed-merge-no-api-calls)); answers weren't re-generated, so a paid re-run would be a new, labelled row.
   - The third loss is PepsiCo 01328, the disputed "answer 0 or $411 million" question from the single-call run.
 - **The verifier changed 1 answer of 57**, fixing none and breaking none. It costs $0.031 per question (it re-reads all the sources), almost half the total, and adds 14 s.
 - **Where the cost and time go** (per question: median time; mean cost, calls and tokens):
@@ -305,14 +307,38 @@ One real run on 1 Nov 2026, after a smoke test on a question of my own: PepsiCo 
 
   Each calculator call is another model turn that re-sends the whole prompt, so the analyst reads about 33,000 tokens to answer from about 15 chunks.
 - **What to keep:**
-  - The planner's company and year: cheap and accurate. Given the right filing by hand, retrieval rises from 86% to 95% hit@5; with the planner's own choices that gain is not yet shown (50 of 57 with the old merge).
+  - The planner's company and year are cheap and accurate, but on these 57 questions they are unlikely to help the single call: replayed as a filter, the evidence is in its top 10 for the same 54 questions ([below](#replay-with-the-fixed-merge-no-api-calls)). No answer run with the filter has been done.
   - The calculator for questions that need arithmetic.
   - Drop the verifier, or keep it only for answers with calculations.
-  - Merge retrieval so every planned year and search gets in (now done in code, not yet re-measured). Under the cap of 20, each ranked list then keeps about 20 / (number of lists) hits, so with two years and four searches the question keeps only its top 2 per year; the re-run will show whether that costs anything.
+  - Merge retrieval so every planned year and search gets in (done in code; the replay below finds the evidence in the sources for 54 of 57). Under the cap of 20, each ranked list then keeps about 20 / (number of lists) hits, so with two years and four searches (ten lists) the question keeps only its top 2 per year. In the replay that cost one question its evidence page (00720: two years and two searches, so six lists of 3 or 4 hits each).
 
   On these 57 questions, which one call already answers at 95%, the agents can't show a gain. That needs the harder test set.
 - **Spend:** $3.65 for the agent runs, plus grading and one debug run of the failed question (not metered; about $0.40 together, an estimate). So about $4.05 in all, under the $5 cap.
 - **Results:** [`results/agents.json`](../results/agents.json) (plans checked, chunk ids, labels for the draft and final answer, tokens, cost and time per step; no FinanceBench text and no answers).
+
+### Replay with the fixed merge (no API calls)
+
+`python -m finrag eval-replay`, run on 2 Nov 2026. It takes the 57 plans saved by the agent run above (`data/eval/agents_runs.jsonl`) and runs today's retrieval on them. Every query embedding comes from the cache (225 of them), and the embedder refuses to call the API, so it cost nothing. Only retrieval is replayed: no answer is generated or graded, so these are evidence counts, not accuracy. It needs the run's local files and the embedding cache, which aren't in the repo, so it can't be re-run from a fresh clone.
+
+The old merge isn't replayed alongside, so index drift since 1 Nov could in principle explain part of the change. It is unlikely: the replay's unfiltered question searches find the evidence in the top 5 and top 10 for the same 49 and 54 questions as [`retrieval_vector.json`](../results/retrieval_vector.json). Code: [`finrag/eval/replay.py`](../finrag/eval/replay.py).
+
+| | Recorded run (old merge) | Replay |
+|---|---|---|
+| Agent sources hold an evidence page | 50 / 57 | **54 / 57** (5 gained, 1 lost; p = 0.22) |
+
+- **Gained:** both refusals (Amcor 00684, Boeing 00678), plus 00723, 00685 and 00464, all with three planned years.
+- **Lost:** 00720 (American Express, two planned years, two searches). With six lists under the cap of 20, each keeps only its top 3 or 4, and the evidence wasn't among them.
+
+**The planner as a filter in front of the single call.** The single call's question (top 10, what the answer reads) searched within the planned company, and also the planned year when exactly one is left after dropping years not in the corpus, as `retrieve()` does (38 questions; company only for the other 19):
+
+| Evidence page in | No filter | Planner's filter |
+|---|---|---|
+| Top 5 | 49 / 57 | 51 / 57 (2 gained, 0 lost; p = 0.5) |
+| Top 10 | 54 / 57 | 54 / 57 (no change) |
+
+The filter changes which chunks the single call reads (for a filtered year, only that filing's), but the evidence is in its top 10 for the same 54 questions either way. With the right filing given by hand the answers didn't move either (54 / 57 both ways, [above](#results-95-correct-with-no-filter)), so a paid answer run with the filter is unlikely to show a gain on these 57; none has been done.
+
+- **Results:** [`results/replay_retrieval.json`](../results/replay_retrieval.json) (per question: planned years, the filter used, sources, and each evidence check; no FinanceBench text).
 
 ## Reproducing
 
@@ -324,6 +350,7 @@ The hybrid, answer and agent result files record the code they ran with as "the 
 | `retrieval_vector_before_reindex.json` | the evaluation code of `90c3017`, but run before that commit's index fixes; the HNSW graph it measured no longer exists |
 | `retrieval_hybrid*.json`, `latency_hybrid.json` | `5ceebe1` |
 | `answers.json`, `answers_second_grader.json` | `6b6009e` |
-| `agents.json` | `2375a8a` (the retrieval merge was changed after it) |
+| `agents.json` | `2375a8a` (the retrieval merge and the calculator's comma handling were changed after it) |
+| `replay_retrieval.json` | the commit after `abb9b14`, which added the replay |
 
-Generation is not fully deterministic even with a seed, so a re-run can differ by a question or two. Replies are cached in `data/cache/`, so re-running the same version on the same machine costs nothing.
+Generation is not fully deterministic even with a seed, so a fresh run could give different answers; how many would change isn't measured, since each setting was run once. Replies are cached in `data/cache/`, so re-running the same version on the same machine costs nothing.

@@ -194,11 +194,14 @@ class LocalEmbedder:
 
 
 class Embedder:
-    """Cached front end: embed_documents / embed_query."""
+    """Cached front end: embed_documents / embed_query. With offline=True it only reads the
+    cache and raises on a miss, so a replay of saved runs can never make an API call."""
 
     def __init__(self, provider: str, model: str, dim: int, api_key: str, cache_dir: Path,
-                 rpm: int = 0, tpm: int = 0):
-        if provider == "gemini":
+                 rpm: int = 0, tpm: int = 0, offline: bool = False):
+        if offline:
+            self.impl = None
+        elif provider == "gemini":
             self.impl = GeminiEmbedder(api_key, model, dim, rpm, tpm)
         elif provider == "local":
             self.impl = LocalEmbedder(model, dim)
@@ -213,6 +216,9 @@ class Embedder:
         found = self.cache.get_many(keys)
         self.cache_hits += len(found)
         todo = [(k, t) for k, t in dict(zip(keys, texts)).items() if k not in found]
+        if todo and self.impl is None:
+            raise RuntimeError(f"{len(todo)} text(s) not in the embedding cache, and this "
+                               "embedder is offline")
         if todo:
             vecs = self.impl.embed([t for _, t in todo], task)
             new = dict(zip([k for k, _ in todo], vecs))
@@ -227,7 +233,7 @@ class Embedder:
         return self._embed([text], "RETRIEVAL_QUERY")[0]
 
 
-def make_embedder(settings) -> Embedder:
+def make_embedder(settings, offline: bool = False) -> Embedder:
     return Embedder(
         settings.embed_provider,
         settings.embed_model,
@@ -236,4 +242,5 @@ def make_embedder(settings) -> Embedder:
         settings.cache_dir,
         settings.embed_rpm,
         settings.embed_tpm,
+        offline,
     )

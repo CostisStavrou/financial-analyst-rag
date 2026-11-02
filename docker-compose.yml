@@ -1,7 +1,7 @@
 # Local Postgres 17 + pgvector. Host port 5433 to avoid clashing with other local Postgres.
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:0.8.7-pg17-bookworm  # the version the results were measured on
     environment:
       POSTGRES_USER: finrag
       POSTGRES_PASSWORD: finrag
